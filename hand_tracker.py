@@ -118,6 +118,18 @@ class HandTracker:
         self.RELEASE_THRESH = 0.18
         self.VELOCITY_LOCK = 0.10
         self.SCROLL_FINGER_GAP = 0.06
+        
+        # Calibrated Values
+        self.is_calibrated = False
+        self.neutral_hand_size = 1.0
+        
+    def apply_calibration(self, pinch: float, release: float, size: float):
+        """Apply user-specific calibrated thresholds."""
+        self.PINCH_THRESH = pinch
+        self.RELEASE_THRESH = release
+        self.neutral_hand_size = size
+        self.is_calibrated = True
+        print(f"[TRACKER] Calibration Applied: P={pinch:.3f}, R={release:.3f}, S={size:.3f}")
 
     def _get_filter(self, idx: int):
         if idx not in self.filters:
