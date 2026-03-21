@@ -1,35 +1,44 @@
 """
-El izleme ve hareket tanıma sistemi
-Profesyonel Hand Tracking ve Gesture Recognition Engine
+Hand Tracking & Gesture Recognition Engine - PRO Version
+Advanced FSM-based interaction system with jitter filtering.
 """
 
 import cv2
 import mediapipe as mp
 import numpy as np
-from dataclasses import dataclass
-from typing import List, Tuple, Optional
+from dataclasses import dataclass, field
+from typing import List, Tuple, Optional, Dict
 from enum import Enum
+import time
 
 
 class GestureType(Enum):
-    """Tanınan hareket türleri (FSM uyumluluğu için)"""
+    """Supported gesture types for system interaction."""
     NONE = 0
-    POINT = 1  # İşaret parmağı uzatılmış
-    GRAB = 2  # Tüm parmaklar kapalı (tutma hareketi)
-    OK = 7  # OK işareti (başparmak + işaret parmağı)
+    POINT = 1       # Index extended
+    GRAB = 2        # Fist (Drag/Grab)
+    PEACE = 3       # Index + Middle (Right Click / Context)
+    OK = 4          # Thumb + Index pinch (Left Click / Select)
+    THUMBS_UP = 5   # Scroll Up / Approve
+    THUMBS_DOWN = 6 # Scroll Down / Reject
+    PALM_OPEN = 7   # Idle / Stop
+    VOICE_MODE = 8  # Custom trigger for voice
+
 
 class GestureState(Enum):
+    """Interaction states for the Finite State Machine."""
     IDLE = 0
-    PINCHING = 1   # Pre-click (Transition state)
-    CLICKED = 2    # Active Click (Held)
-    GRABBING = 3   # Dragging
-    MOVING = 4     # Fast motion (Validation Gate)
-    LOCKED = 5     # Cooldown state
+    PINCHING = 1    # Transient state before CLICK
+    CLICKED = 2     # Active Left Click held
+    RIGHT_CLICK = 3 # Active Right Click
+    GRABBING = 4    # Drag/Drop mode
+    SCROLLING = 5   # Vertical scrolling
+    MOVING = 6      # High-speed motion (Input Lock)
+    LOCKED = 7      # Cooldown
 
 
 @dataclass
 class HandLandmark:
-    """El landmark'ı"""
     x: float
     y: float
     z: float
@@ -38,295 +47,232 @@ class HandLandmark:
 
 @dataclass
 class HandData:
-    """El verisi"""
     landmarks: List[HandLandmark]
-    handedness: str  # 'Right' or 'Left'
+    handedness: str
     confidence: float
     gesture: GestureType
     center: Tuple[float, float]
     is_valid: bool
-    # FSM specific data
     state: GestureState = GestureState.IDLE
     velocity: float = 0.0
     pinch_ratio: float = 0.0
     scroll_y: float = 0.0
+    # Rolling average for stability
+    smoothed_landmarks: List[HandLandmark] = field(default_factory=list)
+
+
+class EMAFilter:
+    """Exponential Moving Average filter for jitter reduction."""
+    def __init__(self, alpha=0.5):
+        self.alpha = alpha
+        self.value = None
+
+    def apply(self, value):
+        if self.value is None:
+            self.value = value
+        else:
+            self.value = self.alpha * value + (1 - self.alpha) * self.value
+        return self.value
 
 
 class HandTracker:
-    # Landmark indices
+    # Landmark Mapping
     WRIST = 0
-    THUMB_CMC = 1
-    THUMB_MCP = 2
-    THUMB_IP = 3
     THUMB_TIP = 4
-    INDEX_MCP = 5
-    INDEX_PIP = 6
-    INDEX_DIP = 7
     INDEX_TIP = 8
-    MIDDLE_MCP = 9
-    MIDDLE_PIP = 10
-    MIDDLE_DIP = 11
+    INDEX_PIP = 6
     MIDDLE_TIP = 12
-    RING_MCP = 13
-    RING_PIP = 14
-    RING_DIP = 15
+    MIDDLE_PIP = 10
     RING_TIP = 16
-    PINKY_MCP = 17
-    PINKY_PIP = 18
-    PINKY_DIP = 19
+    RING_PIP = 14
     PINKY_TIP = 20
+    PINKY_PIP = 18
+    MIDDLE_MCP = 9
 
     def __init__(self, confidence_threshold: float = 0.7):
-        """
-        Initialize Hand Tracker with FSM Engine
-        """
         self.mp_hands = mp.solutions.hands
         self.hands = self.mp_hands.Hands(
             static_image_mode=False,
-            max_num_hands=1, # Focus on one hand for control
+            max_num_hands=1,
             min_detection_confidence=confidence_threshold,
             min_tracking_confidence=confidence_threshold
         )
-        self.mp_drawing = mp.solutions.drawing_utils
+        
+        # Jitter Filtering
+        self.filters = {} # Map of index -> (EMA_x, EMA_y, EMA_z)
+        self.filter_alpha = 0.6
         
         # FSM State
         self.state = GestureState.IDLE
-        self.state_buffer = [] # For stabilization
-        self.BUFFER_SIZE = 3   # Fast reaction, small buffer
+        self.state_buffer = []
+        self.BUFFER_SIZE = 4
         
-        # Physics State
-        self.prev_palm_center = None
+        # Kinematics
+        self.prev_center = None
         self.velocity = 0.0
         
-        # Config (Self-calibrating thresholds)
-        self.PINCH_RATIO_THRESH = 0.10  # Pinch dist / Hand Size
-        self.PINCH_RELEASE_RATIO = 0.18 # Hysteresis release
-        self.VELOCITY_LIMIT = 0.08      # Normalized movement per frame gate
-        
+        # Calibration Thresholds
+        self.PINCH_THRESH = 0.12
+        self.RELEASE_THRESH = 0.18
+        self.VELOCITY_LOCK = 0.10
+        self.SCROLL_FINGER_GAP = 0.06
+
+    def _get_filter(self, idx: int):
+        if idx not in self.filters:
+            self.filters[idx] = (EMAFilter(self.filter_alpha), 
+                                 EMAFilter(self.filter_alpha), 
+                                 EMAFilter(self.filter_alpha))
+        return self.filters[idx]
+
     def process_frame(self, frame: np.ndarray) -> List[HandData]:
-        # Convert to RGB
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = self.hands.process(rgb_frame)
+        h, w, _ = frame.shape
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = self.hands.process(rgb)
         
         hand_data_list = []
         
-        if results.multi_hand_landmarks and results.multi_handedness:
-            # Only process the first hand for system control stability
-            hand_landmarks = results.multi_hand_landmarks[0]
-            handedness_info = results.multi_handedness[0]
+        if results.multi_hand_landmarks:
+            landmarks_raw = results.multi_hand_landmarks[0]
+            handedness = results.multi_handedness[0].classification[0].label
+            conf = results.multi_handedness[0].classification[0].score
             
-            # --- 1. Map Landmarks ---
+            # 1. Landmark Filtering & Mapping
             landmarks = []
-            for lm in hand_landmarks.landmark:
+            smoothed = []
+            for i, lm in enumerate(landmarks_raw.landmark):
+                fx, fy, fz = self._get_filter(i)
                 landmarks.append(HandLandmark(lm.x, lm.y, lm.z, lm.z))
-                
-            # --- 2. Physics Calculations ---
-            # Hand Size (Normalization Factor): Wrist to Middle MCP
-            wrist = landmarks[self.WRIST]
-            middle_mcp = landmarks[self.MIDDLE_MCP]
-            hand_size = self._dist(wrist, middle_mcp)
-            if hand_size == 0: hand_size = 1.0 # Protect div by zero
+                smoothed.append(HandLandmark(
+                    fx.apply(lm.x), fy.apply(lm.y), fz.apply(lm.z), lm.z
+                ))
             
-            # Left Click Pinch (Thumb + Index)
-            pinch_dist = self._dist(landmarks[self.THUMB_TIP], landmarks[self.INDEX_TIP])
-            norm_pinch_dist = pinch_dist / hand_size
+            # 2. Geometry & Physics
+            wrist = smoothed[self.WRIST]
+            mcp = smoothed[self.MIDDLE_MCP]
+            hand_size = np.sqrt((wrist.x - mcp.x)**2 + (wrist.y - mcp.y)**2)
+            if hand_size < 0.01: hand_size = 0.01
             
-            # Right Click Pinch (Thumb + Middle)
-            middle_pinch_dist = self._dist(landmarks[self.THUMB_TIP], landmarks[self.MIDDLE_TIP])
-            norm_middle_pinch = middle_pinch_dist / hand_size
+            # Distances (Normalized)
+            idx_tip = smoothed[self.INDEX_TIP]
+            mid_tip = smoothed[self.MIDDLE_TIP]
+            thumb_tip = smoothed[self.THUMB_TIP]
             
-            # Palm Center & Velocity
-            center_x = np.mean([lm.x for lm in landmarks])
-            center_y = np.mean([lm.y for lm in landmarks])
-            current_center = (center_x, center_y)
+            pinch_dist = self._dist(thumb_tip, idx_tip) / hand_size
+            mid_pinch = self._dist(thumb_tip, mid_tip) / hand_size
             
-            if self.prev_palm_center:
-                dx = current_center[0] - self.prev_palm_center[0]
-                dy = current_center[1] - self.prev_palm_center[1]
-                self.velocity = np.sqrt(dx*dx + dy*dy)
-            else:
-                self.velocity = 0.0
-            self.prev_palm_center = current_center
+            # Velocity
+            center = (np.mean([lm.x for lm in smoothed]), np.mean([lm.y for lm in smoothed]))
+            if self.prev_center:
+                self.velocity = np.sqrt((center[0]-self.prev_center[0])**2 + (center[1]-self.prev_center[1])**2)
+            self.prev_center = center
             
-            # --- 3. FSM Update Logic ---
-            new_state = self._update_fsm(norm_pinch_dist, norm_middle_pinch, self.velocity, landmarks)
+            # 3. FSM Update
+            self.state = self._update_fsm(pinch_dist, mid_pinch, self.velocity, smoothed, hand_size)
             
-            # --- 4. Package Data ---
-            # Map FSM state back to GestureType for compatibility check
-            # We will use the State directly in main.py mostly, but map for now
-            mapped_gesture = self._map_state_to_gesture(new_state)
-            
-            hand_data = HandData(
+            # 4. Data Packaging
+            data = HandData(
                 landmarks=landmarks,
-                handedness=handedness_info.classification[0].label,
-                confidence=handedness_info.classification[0].score,
-                gesture=mapped_gesture, 
-                center=current_center,
-                is_valid=True
+                smoothed_landmarks=smoothed,
+                handedness=handedness,
+                confidence=conf,
+                gesture=self._map_state_to_gesture(self.state, smoothed),
+                center=center,
+                is_valid=True,
+                state=self.state,
+                velocity=self.velocity,
+                pinch_ratio=pinch_dist
             )
-            # Attach extra FSM data for advanced control
-            hand_data.state = new_state
-            hand_data.velocity = self.velocity
-            hand_data.pinch_ratio = norm_pinch_dist
             
-            # Attach scroll data if scrolling
-            if new_state == GestureState.SCROLLING:
-                # Use Y movement of index tip for scroll delta
-                hand_data.scroll_y = landmarks[self.INDEX_TIP].y
-            else:
-                hand_data.scroll_y = 0
-            
-            hand_data_list.append(hand_data)
+            if self.state == GestureState.SCROLLING:
+                data.scroll_y = idx_tip.y
+                
+            hand_data_list.append(data)
             
         return hand_data_list
 
     def _dist(self, p1, p2):
-        return np.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2 + (p1.z - p2.z)**2)
+        return np.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2)
 
-    def _update_fsm(self, pinch_ratio: float, middle_pinch_ratio: float, velocity: float, landmarks: List[HandLandmark]) -> GestureState:
-        """
-        Finite State Machine Core
-        """
-        # Determine strict 'raw' intent based on physics
-        raw_intent = GestureState.IDLE
+    def _update_fsm(self, pinch: float, m_pinch: float, vel: float, lms: List[HandLandmark], size: float) -> GestureState:
+        # State Transition Logic
+        raw = GestureState.IDLE
         
-        # 1. Check Scroll (Index + Middle UP, others closed)
-        # Simplified: Just check if Index and Middle are extended and close together
-        index_open = landmarks[self.INDEX_TIP].y < landmarks[self.INDEX_PIP].y
-        middle_open = landmarks[self.MIDDLE_TIP].y < landmarks[self.MIDDLE_PIP].y
-        ring_closed = landmarks[self.RING_TIP].y > landmarks[self.RING_PIP].y
-        pinky_closed = landmarks[self.PINKY_TIP].y > landmarks[self.PINKY_PIP].y
+        # Extension Checks
+        idx_up = lms[self.INDEX_TIP].y < lms[self.INDEX_PIP].y
+        mid_up = lms[self.MIDDLE_TIP].y < lms[self.MIDDLE_PIP].y
+        ring_up = lms[self.RING_TIP].y < lms[self.RING_PIP].y
+        pinky_up = lms[self.PINKY_TIP].y < lms[self.PINKY_PIP].y
         
-        # Distance between index and middle tips should be small for scroll pose
-        fingers_together = self._dist(landmarks[self.INDEX_TIP], landmarks[self.MIDDLE_TIP]) < 0.05
-        
-        # 2. Check Grab (Fist)
-        fingers_folded = True
-        for tip, pip in [(self.MIDDLE_TIP, self.MIDDLE_PIP), (self.RING_TIP, self.RING_PIP), (self.PINKY_TIP, self.PINKY_PIP)]:
-             if landmarks[tip].y < landmarks[pip].y: 
-                fingers_folded = False
-                break
-        
-        # Logic Tree
-        # Velocity Gate: If moving too fast, lock interaction states (safety)
-        if velocity > self.VELOCITY_LIMIT:
-             raw_intent = GestureState.MOVING
-             
-        elif middle_pinch_ratio < self.PINCH_RATIO_THRESH:
-             # Right Click Intent
-             raw_intent = GestureState.RIGHT_CLICK
-             
-        elif pinch_ratio < self.PINCH_RATIO_THRESH:
-             # Left Click Intent
-             if self.state == GestureState.CLICKED:
-                 raw_intent = GestureState.CLICKED
-             else:
-                 raw_intent = GestureState.PINCHING
-                 
-        elif self.state == GestureState.CLICKED and pinch_ratio < self.PINCH_RELEASE_RATIO:
-             # Hysteresis for Left Click
-             raw_intent = GestureState.CLICKED
-
-        elif index_open and middle_open and ring_closed and pinky_closed and fingers_together:
-             # Two finger scroll
-             raw_intent = GestureState.SCROLLING
-
-        elif fingers_folded:
-             raw_intent = GestureState.GRABBING
-             
+        if vel > self.VELOCITY_LOCK:
+            raw = GestureState.MOVING
+        elif m_pinch < self.PINCH_THRESH:
+            raw = GestureState.RIGHT_CLICK
+        elif pinch < self.PINCH_THRESH:
+            raw = GestureState.CLICKED if self.state in [GestureState.PINCHING, GestureState.CLICKED] else GestureState.PINCHING
+        elif self.state == GestureState.CLICKED and pinch < self.RELEASE_THRESH:
+            raw = GestureState.CLICKED
+        elif idx_up and mid_up and not ring_up and not pinky_up:
+            # Scroll Mode
+            raw = GestureState.SCROLLING
+        elif not idx_up and not mid_up and not ring_up and not pinky_up:
+            raw = GestureState.GRABBING
         else:
-             raw_intent = GestureState.IDLE
-             
-        # Buffer / Debounce Logic
-        self.state_buffer.append(raw_intent)
-        if len(self.state_buffer) > self.BUFFER_SIZE:
-            self.state_buffer.pop(0)
-            
-        # Check stability: All frames in buffer must match to switch state
-        # Exception: Clicked state holds strong (Schmitt trigger logic above handles release)
-        if all(s == raw_intent for s in self.state_buffer):
-            # Transition
-            if raw_intent == GestureState.PINCHING:
-                # Instant transition to click if stable for buffer duration
-                self.state = GestureState.CLICKED
-            else:
-                self.state = raw_intent
-                
+            raw = GestureState.IDLE
+
+        # Debounce
+        self.state_buffer.append(raw)
+        if len(self.state_buffer) > self.BUFFER_SIZE: self.state_buffer.pop(0)
+        
+        if all(s == raw for s in self.state_buffer):
+            if raw == GestureState.PINCHING: return GestureState.CLICKED
+            return raw
         return self.state
 
-    def _map_state_to_gesture(self, state: GestureState) -> GestureType:
+    def _map_state_to_gesture(self, state: GestureState, lms: List[HandLandmark]) -> GestureType:
         if state == GestureState.CLICKED: return GestureType.OK
-        if state == GestureState.RIGHT_CLICK: return GestureType.PEACE # Rebrand PEACE as RIGHT_CLICK downstream
+        if state == GestureState.RIGHT_CLICK: return GestureType.PEACE
         if state == GestureState.GRABBING: return GestureType.GRAB
-        if state == GestureState.SCROLLING: return GestureType.THUMBS_UP # Map to scroll logic
-        if state == GestureState.MOVING: return GestureType.POINT # Just moving cursor, no interaction
-        if state == GestureState.IDLE: return GestureType.POINT   # Idle hand points
-        return GestureType.POINT
         
+        # Check specific poses for IDLE/MOVING states
+        # Thumbs up logic (Thumb up, others closed)
+        thumb_up = lms[self.THUMB_TIP].y < lms[self.THUMB_TIP-2].y and lms[self.THUMB_TIP].y < lms[self.INDEX_TIP].y
+        if thumb_up and lms[self.INDEX_TIP].y > lms[self.INDEX_PIP].y:
+             return GestureType.THUMBS_UP
+             
+        if lms[self.INDEX_TIP].y < lms[self.INDEX_PIP].y and lms[self.MIDDLE_TIP].y > lms[self.MIDDLE_PIP].y:
+            return GestureType.POINT
+            
+        return GestureType.PALM_OPEN
+
     def draw_hand_skeleton(self, frame: np.ndarray, hand_data_list: List[HandData]) -> np.ndarray:
-        if not hand_data_list: return frame
-        
-        for hand_data in hand_data_list:
-            # Custom drawing based on state
-            color = (0, 255, 0) # Green IDLE
-            if hand_data.state == GestureState.CLICKED: color = (0, 0, 255) # Red CLICK
-            if hand_data.state == GestureState.RIGHT_CLICK: color = (255, 0, 255) # Magenta RIGHT CLICK
-            if hand_data.state == GestureState.GRABBING: color = (255, 0, 0) # Blue GRAB
-            if hand_data.state == GestureState.SCROLLING: color = (0, 165, 255) # Orange SCROLLING
-            if hand_data.state == GestureState.MOVING: color = (0, 255, 255) # Yellow MOVING
+        h, w, _ = frame.shape
+        for data in hand_data_list:
+            # Draw skeleton using smoothed landmarks
+            pts = [(int(lm.x * w), int(lm.y * h)) for lm in data.smoothed_landmarks]
             
-            # Check velocity warning
-            if hand_data.velocity > self.VELOCITY_LIMIT:
-                cv2.putText(frame, "SPEED LOCK", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            for i, pt in enumerate(points):
-                color = (0, 255, 255) if i == self.INDEX_TIP else (255, 100, 0)
-                radius = 6 if i in [self.THUMB_TIP, self.INDEX_TIP, self.MIDDLE_TIP, 
-                                   self.RING_TIP, self.PINKY_TIP] else 3
-                cv2.circle(frame, pt, radius, color, -1)
+            # Connections
+            connections = mp.solutions.hands.HAND_CONNECTIONS
+            color = (0, 255, 0)
+            if data.state == GestureState.CLICKED: color = (0, 0, 255)
+            if data.state == GestureState.GRABBING: color = (255, 0, 0)
+            if data.state == GestureState.SCROLLING: color = (0, 165, 255)
             
-            # El merkezi
-            center_x = int(hand_data.center[0] * w)
-            center_y = int(hand_data.center[1] * h)
-            cv2.circle(frame, (center_x, center_y), 8, (255, 0, 0), 2)
+            for conn in connections:
+                cv2.line(frame, pts[conn[0]], pts[conn[1]], color, 2)
             
-            # Hareket adını göster
-            gesture_text = hand_data.gesture.name
-            text_color = (0, 255, 0) if hand_data.gesture != GestureType.NONE else (0, 0, 255)
-            cv2.putText(frame, f"{hand_data.handedness}: {gesture_text}", 
-                       (center_x - 50, center_y - 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
-            
-            # Güven skoru
-            cv2.putText(frame, f"Conf: {hand_data.confidence:.2f}", 
-                       (center_x - 50, center_y - 5),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 0), 1)
-        
+            for pt in pts:
+                cv2.circle(frame, pt, 4, (255, 255, 255), -1)
+                
+            # Info
+            cv2.putText(frame, f"{data.state.name}", (pts[0][0]-20, pts[0][1]+30), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
         return frame
-    
+
     def get_finger_positions(self, hand_data: HandData, frame_shape: Tuple[int, int, int]) -> dict:
-        """
-        Parmak pozisyonlarını ekran koordinatlarında al
-        
-        Args:
-            hand_data: El verisi
-            frame_shape: Frame boyutu (h, w, c)
-            
-        Returns:
-            Parmak pozisyonları sözlüğü
-        """
         h, w, _ = frame_shape
-        
+        lms = hand_data.smoothed_landmarks
         return {
-            'thumb': (int(hand_data.landmarks[self.THUMB_TIP].x * w), 
-                     int(hand_data.landmarks[self.THUMB_TIP].y * h)),
-            'index': (int(hand_data.landmarks[self.INDEX_TIP].x * w), 
-                     int(hand_data.landmarks[self.INDEX_TIP].y * h)),
-            'middle': (int(hand_data.landmarks[self.MIDDLE_TIP].x * w), 
-                      int(hand_data.landmarks[self.MIDDLE_TIP].y * h)),
-            'ring': (int(hand_data.landmarks[self.RING_TIP].x * w), 
-                    int(hand_data.landmarks[self.RING_TIP].y * h)),
-            'pinky': (int(hand_data.landmarks[self.PINKY_TIP].x * w), 
-                     int(hand_data.landmarks[self.PINKY_TIP].y * h)),
-            'center': (int(hand_data.center[0] * w), 
-                      int(hand_data.center[1] * h)),
+            'index': (int(lms[self.INDEX_TIP].x * w), int(lms[self.INDEX_TIP].y * h)),
+            'thumb': (int(lms[self.THUMB_TIP].x * w), int(lms[self.THUMB_TIP].y * h)),
+            'center': (int(hand_data.center[0] * w), int(hand_data.center[1] * h))
         }
