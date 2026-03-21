@@ -1,12 +1,12 @@
 """
 Hand Gesture Control System - PRO Version
-Application: AI-Driven Multimodal Interaction Agent
+Application: AI-Driven Multimodal Interaction Agent (Liquid Glass UI)
 """
 
 import cv2
 import numpy as np
 from hand_tracker import HandTracker, GestureType, GestureState
-from interaction_system import DashboardBuilder
+from interaction_system import DashboardBuilder, GlassRenderer
 from voice_system import VoiceCommandEngine, VoiceState
 from system_control import SystemController
 from advanced_features import AdvancedGestureRecognizer, GestureSequence
@@ -16,7 +16,7 @@ import time
 
 
 class GestureControlApp:
-    """Main AI Agent Application for Hand Gesture and Voice Control."""
+    """Main AI Agent Application with Liquid Glass UI and Automation."""
     
     def __init__(self, camera_id: int = 0, headless: bool = False):
         self.headless = headless
@@ -36,7 +36,7 @@ class GestureControlApp:
         self.controller = SystemController()
         self.voice = VoiceCommandEngine(on_result=self._on_voice_command)
         self.recognizer = AdvancedGestureRecognizer()
-        self.llm = LLMAgent() # Automatically checks for key
+        self.llm = LLMAgent()
         
         # State
         self.system_active = True
@@ -48,11 +48,11 @@ class GestureControlApp:
         
         # Calibration State
         self.is_calibrating = False
-        self.calib_step = 0 # 0: Open Hand, 1: Pinch
+        self.calib_step = 0
         self.calib_samples = []
         self.calib_results = {"pinch": 0, "size": 0}
         
-        # UI
+        # UI (Liquid Glass Dashboard)
         self.dashboard = DashboardBuilder(self.width, self.height)
         self._setup_ui()
         
@@ -62,29 +62,27 @@ class GestureControlApp:
         # Performance
         self.fps = 0
         self.frame_count = 0
-        
-        # Initial Load
         self._load_calibration()
 
     def _setup_ui(self):
-        """Build the interactive HUD overlay."""
-        self.dashboard.add_button(10, 10, 140, 45, "DEBUG [D]", lambda: setattr(self, 'show_debug', not self.show_debug))
-        self.dashboard.add_button(160, 10, 140, 45, "CONTROL [M]", self._toggle_system)
-        self.dashboard.add_button(310, 10, 140, 45, "VOICE [V]", self.voice.listen_once)
-        self.dashboard.add_button(460, 10, 140, 45, "CALIB [C]", self._start_calibration)
+        """Build the fütüristic Liquid Glass HUD overlay."""
+        # Top-left control panel
+        self.dashboard.add_button(10, 10, 140, 45, "DEBUG", lambda: setattr(self, 'show_debug', not self.show_debug), color=(40, 40, 80))
+        self.dashboard.add_button(160, 10, 140, 45, "CONTROL", self._toggle_system, color=(40, 80, 40))
+        self.dashboard.add_button(310, 10, 140, 45, "VOICE", self.voice.listen_once, color=(80, 40, 40))
+        self.dashboard.add_button(460, 10, 140, 45, "CALIBRATE", self._start_calibration, color=(80, 80, 40))
 
     def _setup_commands(self):
-        """Define multimodal voice commands."""
+        """Define multimodal voice commands (No Emojis)."""
         return [
-            self.voice.create_command(["ekran", "görüntüsü"], self._action_screenshot, "Ekran görüntüsü al"),
-            self.voice.create_command(["sistemi", "kapat"], self._toggle_system, "Sistem kontrolünü durdur"),
-            self.voice.create_command(["sistemi", "aç"], self._toggle_system, "Sistem kontrolünü başlat"),
-            self.voice.create_command(["tıkla"], lambda: self.controller.click('left'), "Sol tık yap"),
-            self.voice.create_command(["sağ", "tık"], lambda: self.controller.click('right'), "Sağ tık yap"),
-            self.voice.create_command(["bunu", "sil"], self._multimodal_delete, "Tutulan nesneyi sil"),
-            self.voice.create_command(["kalibrasyon", "başlat"], self._start_calibration, "Kişisel kalibrasyonu başlat"),
-            self.voice.create_command(["bu", "ne", "ekranda", "anlat"], self._llm_describe_screen, "Ekranı analiz et"),
-            self.voice.create_command(["bul", "tıkla", "git"], self._llm_semantic_nav, "Semantik navigasyon"),
+            self.voice.create_command(["ekran", "görüntüsü"], self._action_screenshot, "Capture Screenshot"),
+            self.voice.create_command(["sistemi", "kapat"], self._toggle_system, "Disable System Control"),
+            self.voice.create_command(["sistemi", "aç"], self._toggle_system, "Enable System Control"),
+            self.voice.create_command(["tıkla"], lambda: self.controller.click('left'), "Left Click"),
+            self.voice.create_command(["sağ", "tık"], lambda: self.controller.click('right'), "Right Click"),
+            self.voice.create_command(["bunu", "sil"], self._multimodal_delete, "Delete Active Target"),
+            self.voice.create_command(["kalibrasyon", "başlat"], self._start_calibration, "Start Calibration"),
+            self.voice.create_command(["ekranı", "anlat"], self._llm_describe_screen, "Analyze Screen"),
         ]
 
     def _start_calibration(self):
@@ -92,28 +90,21 @@ class GestureControlApp:
         self.calib_step = 0
         self.calib_samples = []
         self.voice.speak("Kalibrasyon başladı. Lütfen elinizi açık şekilde kameraya tutun.")
-        print("[AGENT] Calibration Started: Step 0 (Open Hand)")
 
     def _process_calibration(self, hand):
-        """Analyze hand data during calibration steps."""
-        # Normalize hand size (Wrist to Middle MCP)
         wrist = hand.smoothed_landmarks[0]
         mcp = hand.smoothed_landmarks[9]
         hand_size = np.sqrt((wrist.x - mcp.x)**2 + (wrist.y - mcp.y)**2)
         
         if self.calib_step == 0:
-            # Establishing Neutral Hand Size
             self.calib_samples.append(hand_size)
             if len(self.calib_samples) >= 30:
                 self.calib_results["size"] = np.mean(self.calib_samples)
                 self.calib_samples = []
                 self.calib_step = 1
-                self.voice.speak("Tamam. Şimdi işaret parmağınızla baş parmağınızı birleştirerek tık yapın ve tutun.")
-                print(f"[AGENT] Neutral Size: {self.calib_results['size']:.4f}")
+                self.voice.speak("Lütfen tık hareketi yapın.")
                 
         elif self.calib_step == 1:
-            # Establishing Pinch Threshold
-            # We need raw pinch distance / current hand size
             thumb = hand.smoothed_landmarks[4]
             index = hand.smoothed_landmarks[8]
             pinch_dist = np.sqrt((thumb.x - index.x)**2 + (thumb.y - index.y)**2)
@@ -121,286 +112,156 @@ class GestureControlApp:
             
             if len(self.calib_samples) >= 30:
                 self.calib_results["pinch"] = np.mean(self.calib_samples)
-                # Apply results
-                p_thresh = self.calib_results["pinch"] * 1.2 # Add margin
-                r_thresh = p_thresh * 1.5
-                self.tracker.apply_calibration(p_thresh, r_thresh, self.calib_results["size"])
-                
+                self.tracker.apply_calibration(self.calib_results["pinch"] * 1.2, self.calib_results["pinch"] * 1.8, self.calib_results["size"])
                 self.is_calibrating = False
-                self.voice.speak("Kalibrasyon tamamlandı. Sistem size özel optimize edildi.")
-                print(f"[AGENT] Calibrated Pinch: {p_thresh:.4f}")
-                # Optional: Save to file (Step 3)
+                self.voice.speak("Kalibrasyon tamamlandı.")
                 self._save_calibration()
 
     def _save_calibration(self):
         import json
-        data = {
-            "pinch": self.tracker.PINCH_THRESH,
-            "release": self.tracker.RELEASE_THRESH,
-            "size": self.tracker.neutral_hand_size,
-            "timestamp": time.time()
-        }
-        with open("calibration.json", "w") as f:
-            json.dump(data, f)
-        print("[AGENT] Calibration saved to calibration.json")
+        data = {"pinch": self.tracker.PINCH_THRESH, "release": self.tracker.RELEASE_THRESH, "size": self.tracker.neutral_hand_size}
+        with open("calibration.json", "w") as f: json.dump(data, f)
 
     def _load_calibration(self):
-        import json
-        import os
+        import json, os
         if os.path.exists("calibration.json"):
             try:
                 with open("calibration.json", "r") as f:
                     data = json.load(f)
                 self.tracker.apply_calibration(data["pinch"], data["release"], data["size"])
-                print("[AGENT] Calibration loaded from file.")
-            except Exception:
-                print("[AGENT] Failed to load calibration.")
+            except: pass
 
     def _toggle_system(self):
         self.system_active = not self.system_active
-        status = "aktif" if self.system_active else "pasif"
-        self.voice.speak(f"Sistem kontrolü {status}")
+        self.voice.speak(f"Sistem kontrolü {'aktif' if self.system_active else 'pasif'}")
 
     def _action_screenshot(self):
         cv2.imwrite(f"cap_{int(time.time())}.png", self.last_frame)
-        self.voice.speak("Ekran görüntüsü kaydedildi.")
+        self.voice.speak("Görüntü kaydedildi.")
 
     def _multimodal_delete(self):
-        """Example of Hybrid Control: Command while Grabbing."""
         if self.current_hand and self.current_hand.state == GestureState.GRABBING:
              self.controller.press_key('delete')
-             self.voice.speak("Nesne silindi.")
-        else:
-             self.voice.speak("Silinecek bir nesne tutulmuyor.")
+             self.voice.speak("Silindi.")
+        else: self.voice.speak("Hedef yok.")
 
     def _llm_describe_screen(self):
-        """Analyze current frame with Gemini and speak description."""
-        if not self.llm.active:
-            self.voice.speak("Zeka motoru bağlı değil.")
-            return
-
-        self.voice.speak("Ekranı analiz ediyorum, lütfen bekleyin...")
+        if not self.llm.active: return
+        self.voice.speak("Analiz ediliyor...")
         description = self.llm.analyze_frame(self.last_frame)
-        print(f"[AGENT] AI Vision: {description}")
         self.voice.speak(description)
 
-    def _llm_semantic_nav(self, query: str = ""):
-        """Find an element by name and move mouse there."""
-        if not self.llm.active: return
-
-        self.voice.speak("Öğeyi arıyorum...")
-        target = query or "aktif buton" 
-        coords = self.llm.find_element(self.last_frame, target)
-
-        if coords:
-            nx, ny = coords
-            self.controller.move_mouse(nx, ny)
-            self.controller.click('left')
-            self.voice.speak(f"{target} bulundu ve tıklandı.")
-        else:
-            self.voice.speak("Maalesef öğeyi bulamadım.")
-
     def _on_voice_command(self, text: str):
-        print(f"[VOICE] Raw: {text}")
         cmd = self.voice.match_command(text, self.commands)
-        if cmd:
-            print(f"[VOICE] Executing: {cmd['description']}")
-            # Handle semantic nav specially if it's the command
-            if cmd['description'] == "Semantik navigasyon":
-                self._llm_semantic_nav(text)
-            else:
-                cmd['action']()
+        if cmd: cmd['action']()
         elif self.llm.active:
-            # Fallback to LLM reasoning for non-predefined commands
-            response = self.llm.reason_command(text)
-            self.voice.speak(response)
-        else:
-            self.voice.speak("Komut anlaşılamadı.")
-
-    def _toggle_system(self):
-        self.system_active = not self.system_active
-        status = "aktif" if self.system_active else "pasif"
-        self.voice.speak(f"Sistem kontrolü {status}")
+            self.voice.speak(self.llm.reason_command(text))
 
     def process_frame(self, frame: np.ndarray) -> np.ndarray:
         self.last_frame = frame.copy()
         hands = self.tracker.process_frame(frame)
         self.current_hand = hands[0] if hands else None
         
-        # 1. Visual Feedback (Skeleton)
-        if not self.headless:
-            frame = self.tracker.draw_hand_skeleton(frame, hands)
-            
-        # 2. Calibration Mode
-        if self.is_calibrating and self.current_hand:
-            self._process_calibration(self.current_hand)
-            self._draw_calibration_hud(frame)
-            return frame # Skip other logic during calibration
-            
-        # 3. Logic Implementation
-        if self.current_hand and self.system_active:
+        # 1. UI Interaction
+        pointer = self.current_hand.center if self.current_hand else (0, 0)
+        pointer_px = (int(pointer[0] * self.width), int(pointer[1] * self.height))
+        clicked = (self.current_hand.state == GestureState.CLICKED) if self.current_hand else False
+        self.dashboard.get_manager().check_interactions(pointer_px, clicked)
+        
+        # 2. Logic Implementation
+        if self.current_hand and self.system_active and not self.is_calibrating:
             h = self.current_hand
             nx, ny = h.center[0], h.center[1]
             
-            # Mouse Control
             if h.state in [GestureState.IDLE, GestureState.MOVING, GestureState.CLICKED, GestureState.RIGHT_CLICK]:
                 self.controller.move_mouse(nx, ny)
+            if h.state == GestureState.CLICKED: self.controller.click('left')
+            if h.state == GestureState.RIGHT_CLICK: self.controller.click('right')
+            if h.state == GestureState.GRABBING: self.controller.drag_mouse(nx, ny)
+            if h.state == GestureState.SCROLLING: self.controller.scroll_adaptive(h.scroll_y)
+            else: self.controller.reset_scroll()
                 
-            if h.state == GestureState.CLICKED:
-                self.controller.click('left')
+            if h.gesture == GestureType.PEACE: self.controller.zoom_adaptive(h.z_depth)
+            else: self.controller.reset_zoom()
+            if h.gesture == GestureType.VOICE_MODE: self.voice.listen_once()
                 
-            if h.state == GestureState.RIGHT_CLICK:
-                self.controller.click('right')
-                
-            if h.state == GestureState.GRABBING:
-                self.controller.drag_mouse(nx, ny)
-                
-            if h.state == GestureState.SCROLLING:
-                self.controller.scroll_adaptive(h.scroll_y)
-            else:
-                self.controller.reset_scroll()
-                
-            # Zoom Control (Using PEACE pose)
-            if h.gesture == GestureType.PEACE:
-                self.controller.zoom_adaptive(h.z_depth)
-            else:
-                self.controller.reset_zoom()
-                
-            # Voice Mode Trigger (Special pose)
-            if h.gesture == GestureType.VOICE_MODE:
-                self.voice.listen_once()
-                
-            # --- Swipe Logic ---
             swipe = self.tracker.detect_swipe()
             if swipe:
-                self.last_swipe = swipe
-                self.swipe_time = time.time()
-                print(f"[AGENT] SWIPE: {swipe}")
-                
-                # Perform Action
-                import platform
-                mod = 'command' if platform.system() == 'Darwin' else 'alt'
-                
-                if swipe == "RIGHT":
-                    self.controller.press_key('tab') # Simple tab for now or hotkey
-                    # For browser tab: ctrl+tab
-                    import pyautogui
-                    pyautogui.hotkey('ctrl', 'tab')
-                elif swipe == "LEFT":
-                    import pyautogui
-                    pyautogui.hotkey('ctrl', 'shift', 'tab')
-                elif swipe == "UP":
-                    self.controller.press_key('up')
-                elif swipe == "DOWN":
-                    self.controller.press_key('down')
+                self.last_swipe, self.swipe_time = swipe, time.time()
+                import pyautogui
+                if swipe == "RIGHT": pyautogui.hotkey('ctrl', 'tab')
+                elif swipe == "LEFT": pyautogui.hotkey('ctrl', 'shift', 'tab')
 
-        # 3. UI Rendering
+        # 3. Calibration
+        if self.is_calibrating and self.current_hand:
+            self._process_calibration(self.current_hand)
+
+        # 4. Professional Rendering
         if not self.headless:
-            frame = self.dashboard.get_manager().draw_objects(frame)
-            self._draw_hud(frame)
+            # Draw UI
+            frame = self.dashboard.get_manager().draw(frame)
+            if self.is_calibrating: self._draw_calibration_hud(frame)
+            else: self._draw_hud(frame)
+            
+            # Draw Hand
+            if self.current_hand:
+                frame = self.tracker.draw_hand_skeleton(frame, hands)
+                cv2.circle(frame, pointer_px, 8, (255, 255, 255), 2, cv2.LINE_AA)
             
         return frame
 
     def _draw_calibration_hud(self, frame):
-        """Draw calibration overlay with progress bar."""
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (0, 0), (self.width, self.height), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
-        
         progress = len(self.calib_samples) / 30.0
-        bar_w = 400
-        x = (self.width - bar_w) // 2
-        y = self.height // 2
-        
-        # Text
-        txt = "ADIM 1: Elinizi Açık Tutun" if self.calib_step == 0 else "ADIM 2: Tık Yapın ve Bekleyin"
-        cv2.putText(frame, txt, (x, y - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-        
-        # Progress Bar
-        cv2.rectangle(frame, (x, y), (x + bar_w, y + 30), (100, 100, 100), -1)
-        cv2.rectangle(frame, (x, y), (x + int(bar_w * progress), y + 30), (0, 255, 0), -1)
+        txt = "STEP 1: OPEN HAND" if self.calib_step == 0 else "STEP 2: PINCH"
+        GlassRenderer.draw_glass_rect(frame, self.width//2 - 200, self.height//2 - 50, 400, 100, (40, 40, 40), 0.7, label=txt)
+        cv2.rectangle(frame, (self.width//2 - 180, self.height//2 + 10), (self.width//2 - 180 + int(360 * progress), self.height//2 + 30), (0, 255, 0), -1)
 
     def _draw_hud(self, frame):
-        """Modern AI HUD Overlay."""
-        # Status Bar
-        status_color = (0, 255, 0) if self.system_active else (0, 0, 255)
-        status_text = "SYSTEM ONLINE" if self.system_active else "SYSTEM OFFLINE"
-        if self.tracker.is_calibrated: status_text += " | CALIBRATED"
+        # Bottom Status Bar (Liquid Glass)
+        status_color = (100, 255, 100) if self.system_active else (100, 100, 255)
+        status_text = f"SYSTEM ACTIVE | CALIBRATED: {self.tracker.is_calibrated}"
+        GlassRenderer.draw_glass_rect(frame, 0, self.height-50, self.width, 50, (20, 20, 20), 0.6)
+        cv2.putText(frame, status_text, (20, self.height-18), cv2.FONT_HERSHEY_DUPLEX, 0.6, status_color, 1, cv2.LINE_AA)
         
-        cv2.rectangle(frame, (0, self.height-40), (self.width, self.height), (20, 20, 20), -1)
-        cv2.putText(frame, status_text, (20, self.height-12), cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
+        # AI Status
+        brain_text = "AI BRAIN: ONLINE" if self.llm.active else "AI BRAIN: OFFLINE"
+        cv2.putText(frame, brain_text, (self.width-250, self.height-18), cv2.FONT_HERSHEY_DUPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
         
-        # Voice Status
-        v_state = self.voice.state.name
-        cv2.putText(frame, f"VOICE ENGINE: {v_state}", (self.width-250, self.height-12), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-        
-        # LLM Brain Status
-        brain_color = (0, 255, 0) if self.llm.active else (150, 150, 150)
-        brain_text = "AI BRAIN: CONNECTED" if self.llm.active else "AI BRAIN: OFFLINE"
-        cv2.putText(frame, brain_text, (self.width//2 - 80, self.height-12), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, brain_color, 2)
-        
-        # Swipe Feedback
         if self.last_swipe and time.time() - self.swipe_time < 1.0:
-            s_txt = f"SWIPE {self.last_swipe}!"
-            cv2.putText(frame, s_txt, (self.width//2 - 100, 100), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 0, 255), 3)
+            GlassRenderer.draw_glass_rect(frame, self.width//2 - 100, 100, 200, 60, (150, 0, 150), 0.5, label=f"SWIPE {self.last_swipe}")
         
-        if self.show_debug:
-            self._draw_debug(frame)
+        if self.show_debug: self._draw_debug(frame)
 
     def _draw_debug(self, frame):
-        # Kinematics & Stats
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (10, 70), (250, 200), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
-        
+        GlassRenderer.draw_glass_rect(frame, 10, 70, 260, 140, (0, 0, 0), 0.4)
         y = 95
         debug_info = [
             f"FPS: {self.fps}",
             f"STATE: {self.current_hand.state.name if self.current_hand else 'NONE'}",
-            f"GESTURE: {self.current_hand.gesture.name if self.current_hand else 'NONE'}",
-            f"VELOCITY: {self.current_hand.velocity:.4f}" if self.current_hand else "VELOCITY: 0",
-            f"Z-DEPTH: {self.current_hand.z_depth:.4f}" if self.current_hand else "Z-DEPTH: 0"
+            f"Z-DEPTH: {self.current_hand.z_depth:.4f}" if self.current_hand else "Z: 0"
         ]
         for line in debug_info:
-            cv2.putText(frame, line, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+            cv2.putText(frame, line, (20, y), cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
             y += 25
 
     def run(self):
-        print("[AGENT] Initializing loop...")
         last_time = time.time()
         f_count = 0
-        
-        try:
-            while self.running:
-                ret, frame = self.cap.read()
-                if not ret: break
-                
-                # Process
-                out = self.process_frame(frame)
-                
-                # FPS
-                f_count += 1
-                if time.time() - last_time >= 1.0:
-                    self.fps = f_count
-                    f_count = 0
-                    last_time = time.time()
-                
-                # Show
-                if not self.headless:
-                    cv2.imshow("Hand Control System - AI AGENT v2", out)
-                    key = cv2.waitKey(1) & 0xFF
-                    if key == ord('q'): break
-                    if key == ord('d'): self.show_debug = not self.show_debug
-                    if key == ord('m'): self._toggle_system()
-                    if key == ord('v'): self.voice.listen_once()
-                    if key == ord('c'): self._start_calibration()
-                    
-        finally:
-            self.cap.release()
-            cv2.destroyAllWindows()
+        while self.running:
+            ret, frame = self.cap.read()
+            if not ret: break
+            out = self.process_frame(frame)
+            f_count += 1
+            if time.time() - last_time >= 1.0:
+                self.fps, f_count, last_time = f_count, 0, time.time()
+            if not self.headless:
+                cv2.imshow("HAND CONTROL AI - LIQUID GLASS", out)
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'): break
+                if key == ord('d'): self.show_debug = not self.show_debug
+                if key == ord('c'): self._start_calibration()
+        self.cap.release()
+        cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     app = GestureControlApp()
