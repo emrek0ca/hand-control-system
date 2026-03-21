@@ -1,44 +1,60 @@
-#!/usr/bin/env python3
 """
-Launcher for Hand Gesture Control System
+Universal AI Agent Launcher & App Builder
+Handles dependencies, shows 3D Welcome Screen, and starts the main loop.
 """
+
 import os
 import sys
-import argparse
 import subprocess
+import time
 
-def main():
-    parser = argparse.ArgumentParser(description="Hand Gesture Control Launcher")
-    parser.add_argument("--mode", "-m", choices=["debug", "pro"], default="pro",
-                      help="Mode to run: 'debug' (windowed) or 'pro' (headless/magic wand)")
-    args = parser.parse_args()
-
-    # Base command
-    cmd = [sys.executable, "main.py"]
-
-    if args.mode == "pro":
-        print("\n🚀 Starting Professional 'Magic Wand' Mode...")
-        print("   - No camera window")
-        print("   - Advance smoothing active")
-        print("   - System control active")
-        print("💡 Commands:")
-        print("   - Point index finger to move cursor")
-        print("   - Pinch (OK sign) to click")
-        print("   - Fist (Grab) to drag")
-        print("   - Peace sign to right click")
-        print("\n❌ Press Ctrl+C to stop.\n")
-        
-        cmd.append("--headless")
-        
-    else:
-        print("\n🐞 Starting Debug Mode...")
-        print("   - Camera window visible")
-        print("   - Visual feedback on")
-        
+def check_dependencies():
+    """Ensure all requirements are installed."""
+    print("[LAUNCHER] Checking system environment...")
     try:
-        subprocess.run(cmd)
-    except KeyboardInterrupt:
-        print("\nStopping...")
+        import mediapipe
+        import google.generativeai
+        import cv2
+    except ImportError:
+        print("[LAUNCHER] Installing missing dependencies...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+
+def run_welcome():
+    """Show the fütüristic intro before the main app."""
+    try:
+        import cv2
+        import numpy as np
+        from interaction_system import IntroManager
+        
+        intro = IntroManager(1280, 720)
+        start_t = time.time()
+        
+        print("[LAUNCHER] Starting Neural Link...")
+        
+        while time.time() - start_t < intro.duration:
+            intro.update()
+            frame = intro.draw()
+            
+            cv2.imshow("Hand Control AI - INITIALIZING", frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+        
+        cv2.destroyAllWindows()
+    except Exception as e:
+        print(f"[LAUNCHER] Intro skipped: {e}")
+
+def start_main():
+    """Launch the main AI Agent loop."""
+    from main import GestureControlApp
+    app = GestureControlApp()
+    app.run()
 
 if __name__ == "__main__":
-    main()
+    # 1. Self-Correction
+    check_dependencies()
+    
+    # 2. Fütüristic Intro
+    run_welcome()
+    
+    # 3. Main Engine
+    start_main()
