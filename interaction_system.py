@@ -2,6 +2,7 @@
 Liquid Glass UI Engine - Pro Version
 Advanced Glassmorphism UI components with transparency and glow effects.
 Emoji-free, professional design language.
+Includes Intro/Splash Screen Engine.
 """
 
 import cv2
@@ -85,20 +86,86 @@ class TrailManager:
 
 class Particle:
     """A single liquid glass particle."""
-    def __init__(self, x, y, vx, vy, color):
-        self.x, self.y = x, y
-        self.vx, self.vy = vx, vy
-        self.life = 1.0  # 1.0 to 0.0
-        self.decay = 0.02 + np.random.random() * 0.03
+    def __init__(self, x, y, vx, vy, color, z=0):
+        self.x, self.y, self.z = x, y, z
+        self.vx, self.vy, self.vz = vx, vy, (np.random.random() - 0.5) * 2
+        self.life = 1.0  
+        self.decay = 0.01 + np.random.random() * 0.02
         self.color = color
-        self.size = 2 + np.random.random() * 3
+        self.base_size = 2 + np.random.random() * 4
 
     def update(self):
         self.x += self.vx
         self.y += self.vy
+        self.z += self.vz
         self.life -= self.decay
-        self.size *= 0.95
         return self.life > 0
+
+class IntroManager:
+    """Handles the fütüristic 3D particle welcome screen."""
+    def __init__(self, width, height):
+        self.width, self.height = width, height
+        self.particles = []
+        self.start_time = time.time()
+        self.duration = 4.0 # seconds
+        self.text = "MERHABA"
+        self.sub_text = "AI AGENT INITIALIZING"
+
+    def update(self):
+        # Spawn new floating particles
+        if len(self.particles) < 200:
+            self.particles.append(Particle(
+                np.random.randint(0, self.width),
+                np.random.randint(0, self.height),
+                (np.random.random() - 0.5) * 2,
+                (np.random.random() - 0.5) * 2,
+                (200, 255, 255),
+                z=np.random.random() * 100
+            ))
+        
+        # Update existing
+        self.particles = [p for p in self.particles if p.update()]
+
+    def draw(self) -> np.ndarray:
+        frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        
+        # 1. Draw 3D Floating Particles
+        for p in self.particles:
+            # Simple 3D projection
+            scale = 200 / (200 + p.z)
+            px = int(self.width/2 + (p.x - self.width/2) * scale)
+            py = int(self.height/2 + (p.y - self.height/2) * scale)
+            size = int(p.base_size * scale)
+            alpha = p.life * (1.0 - p.z / 200)
+            
+            if 0 <= px < self.width and 0 <= py < self.height:
+                color = tuple(int(c * alpha) for c in p.color)
+                cv2.circle(frame, (px, py), size, color, -1, cv2.LINE_AA)
+
+        # 2. Draw Welcome Text (Glow Effect)
+        elapsed = time.time() - self.start_time
+        text_alpha = min(1.0, elapsed / 1.5)
+        if elapsed > self.duration - 1.0:
+            text_alpha = max(0.0, self.duration - elapsed)
+
+        font = cv2.FONT_HERSHEY_DUPLEX
+        scale = 2.5
+        thick = 3
+        t_size = cv2.getTextSize(self.text, font, scale, thick)[0]
+        tx = (self.width - t_size[0]) // 2
+        ty = (self.height + t_size[1]) // 2
+        
+        color = (int(255 * text_alpha), int(255 * text_alpha), int(255 * text_alpha))
+        # Shadow/Glow
+        cv2.putText(frame, self.text, (tx+2, ty+2), font, scale, (50, 50, 50), thick, cv2.LINE_AA)
+        cv2.putText(frame, self.text, (tx, ty), font, scale, color, thick, cv2.LINE_AA)
+        
+        # Subtext
+        s_scale = 0.7
+        s_size = cv2.getTextSize(self.sub_text, font, s_scale, 1)[0]
+        cv2.putText(frame, self.sub_text, ((self.width - s_size[0]) // 2, ty + 50), font, s_scale, (150, 150, 150), 1, cv2.LINE_AA)
+
+        return frame
 
 class ParticleEngine:
     """High-performance particle management system."""
