@@ -9,6 +9,7 @@ import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Callable
 from enum import Enum
+import time
 
 
 class ObjectType(Enum):
@@ -40,10 +41,46 @@ class InteractiveObject:
     is_dragging: bool = False
     is_hovered: bool = False
     glow_intensity: float = 0.0
+    # Animation properties
+    target_position: Optional[Point] = None
+    lerp_speed: float = 0.15
     
     def contains_point(self, point: Point) -> bool:
         return (self.position.x <= point.x <= self.position.x + self.size[0] and
                 self.position.y <= point.y <= self.position.y + self.size[1])
+
+    def update_animation(self):
+        """Smoothly move position towards target_position."""
+        if self.target_position:
+            dx = self.target_position.x - self.position.x
+            dy = self.target_position.y - self.position.y
+            self.position.x += dx * self.lerp_speed
+            self.position.y += dy * self.lerp_speed
+
+
+class TrailManager:
+    """Manages a fading liquid trail for the hand pointer."""
+    def __init__(self, max_len: int = 15):
+        self.points = [] # List of (x, y, timestamp)
+        self.max_len = max_len
+
+    def add_point(self, x: int, y: int):
+        self.points.append((x, y, time.time()))
+        if len(self.points) > self.max_len:
+            self.points.pop(0)
+
+    def draw(self, frame: np.ndarray, color: Tuple[int, int, int] = (255, 255, 255)):
+        if len(self.points) < 2: return
+        
+        for i in range(len(self.points) - 1):
+            p1 = self.points[i]
+            p2 = self.points[i+1]
+            
+            # Fade based on age/index
+            alpha = (i + 1) / len(self.points)
+            thickness = int(2 + 6 * alpha)
+            
+            cv2.line(frame, (p1[0], p1[1]), (p2[0], p2[1]), color, thickness, cv2.LINE_AA)
 
 
 class GlassRenderer:
@@ -87,6 +124,22 @@ class GlassRenderer:
             cv2.putText(frame, label, (tx+1, ty+1), font, scale, (0, 0, 0), thickness, cv2.LINE_AA)
             cv2.putText(frame, label, (tx, ty), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
 
+    @staticmethod
+    def draw_aura(frame: np.ndarray, center: Tuple[int, int], radius: int, 
+                  color: Tuple[int, int, int], intensity: float):
+        """Draws a pulsing glowing aura around a point."""
+        if intensity <= 0: return
+        
+        # Pulsing logic
+        pulse = 1.0 + 0.1 * np.sin(time.time() * 5)
+        r = int(radius * pulse)
+        
+        for i in range(1, 5):
+            alpha = (intensity * 0.4) / i
+            cv2.circle(frame, center, r + i*2, color, 1, cv2.LINE_AA)
+        
+        cv2.circle(frame, center, r, (255, 255, 255), 1, cv2.LINE_AA)
+
 
 class InteractionManager:
     """Manages UI objects and their liquid interactions."""
@@ -96,6 +149,7 @@ class InteractionManager:
         self.height = height
         self.objects: List[InteractiveObject] = []
         self.active_object: Optional[InteractiveObject] = None
+        self.trail = TrailManager()
 
     def add_object(self, obj: InteractiveObject):
         self.objects.append(obj)
@@ -103,8 +157,10 @@ class InteractionManager:
     def check_interactions(self, pointer: Tuple[int, int], clicked: bool):
         p = Point(pointer[0], pointer[1])
         self.active_object = None
+        self.trail.add_point(pointer[0], pointer[1])
         
         for obj in self.objects:
+            obj.update_animation()
             obj.is_hovered = obj.contains_point(p)
             
             # Liquid Glow Animation
@@ -118,6 +174,10 @@ class InteractionManager:
                 obj.on_click()
 
     def draw(self, frame: np.ndarray) -> np.ndarray:
+        # 1. Draw Trail
+        self.trail.draw(frame)
+        
+        # 2. Draw Objects
         for obj in self.objects:
             x, y = int(obj.position.x), int(obj.position.y)
             w, h = obj.size
