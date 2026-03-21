@@ -40,6 +40,12 @@ class GestureControlApp:
         self.show_debug = True
         self.current_hand = None
         
+        # Calibration State
+        self.is_calibrating = False
+        self.calib_step = 0 # 0: Open Hand, 1: Pinch
+        self.calib_samples = []
+        self.calib_results = {"pinch": 0, "size": 0}
+        
         # UI
         self.dashboard = DashboardBuilder(self.width, self.height)
         self._setup_ui()
@@ -50,12 +56,16 @@ class GestureControlApp:
         # Performance
         self.fps = 0
         self.frame_count = 0
+        
+        # Initial Load
+        self._load_calibration()
 
     def _setup_ui(self):
         """Build the interactive HUD overlay."""
         self.dashboard.add_button(10, 10, 140, 45, "DEBUG [D]", lambda: setattr(self, 'show_debug', not self.show_debug))
         self.dashboard.add_button(160, 10, 140, 45, "CONTROL [M]", self._toggle_system)
         self.dashboard.add_button(310, 10, 140, 45, "VOICE [V]", self.voice.listen_once)
+        self.dashboard.add_button(460, 10, 140, 45, "CALIB [C]", self._start_calibration)
 
     def _setup_commands(self):
         """Define multimodal voice commands."""
@@ -66,7 +76,77 @@ class GestureControlApp:
             self.voice.create_command(["tıkla"], lambda: self.controller.click('left'), "Sol tık yap"),
             self.voice.create_command(["sağ", "tık"], lambda: self.controller.click('right'), "Sağ tık yap"),
             self.voice.create_command(["bunu", "sil"], self._multimodal_delete, "Tutulan nesneyi sil"),
+            self.voice.create_command(["kalibrasyon", "başlat"], self._start_calibration, "Kişisel kalibrasyonu başlat"),
         ]
+
+    def _start_calibration(self):
+        self.is_calibrating = True
+        self.calib_step = 0
+        self.calib_samples = []
+        self.voice.speak("Kalibrasyon başladı. Lütfen elinizi açık şekilde kameraya tutun.")
+        print("[AGENT] Calibration Started: Step 0 (Open Hand)")
+
+    def _process_calibration(self, hand):
+        """Analyze hand data during calibration steps."""
+        # Normalize hand size (Wrist to Middle MCP)
+        wrist = hand.smoothed_landmarks[0]
+        mcp = hand.smoothed_landmarks[9]
+        hand_size = np.sqrt((wrist.x - mcp.x)**2 + (wrist.y - mcp.y)**2)
+        
+        if self.calib_step == 0:
+            # Establishing Neutral Hand Size
+            self.calib_samples.append(hand_size)
+            if len(self.calib_samples) >= 30:
+                self.calib_results["size"] = np.mean(self.calib_samples)
+                self.calib_samples = []
+                self.calib_step = 1
+                self.voice.speak("Tamam. Şimdi işaret parmağınızla baş parmağınızı birleştirerek tık yapın ve tutun.")
+                print(f"[AGENT] Neutral Size: {self.calib_results['size']:.4f}")
+                
+        elif self.calib_step == 1:
+            # Establishing Pinch Threshold
+            # We need raw pinch distance / current hand size
+            thumb = hand.smoothed_landmarks[4]
+            index = hand.smoothed_landmarks[8]
+            pinch_dist = np.sqrt((thumb.x - index.x)**2 + (thumb.y - index.y)**2)
+            self.calib_samples.append(pinch_dist / hand_size)
+            
+            if len(self.calib_samples) >= 30:
+                self.calib_results["pinch"] = np.mean(self.calib_samples)
+                # Apply results
+                p_thresh = self.calib_results["pinch"] * 1.2 # Add margin
+                r_thresh = p_thresh * 1.5
+                self.tracker.apply_calibration(p_thresh, r_thresh, self.calib_results["size"])
+                
+                self.is_calibrating = False
+                self.voice.speak("Kalibrasyon tamamlandı. Sistem size özel optimize edildi.")
+                print(f"[AGENT] Calibrated Pinch: {p_thresh:.4f}")
+                # Optional: Save to file (Step 3)
+                self._save_calibration()
+
+    def _save_calibration(self):
+        import json
+        data = {
+            "pinch": self.tracker.PINCH_THRESH,
+            "release": self.tracker.RELEASE_THRESH,
+            "size": self.tracker.neutral_hand_size,
+            "timestamp": time.time()
+        }
+        with open("calibration.json", "w") as f:
+            json.dump(data, f)
+        print("[AGENT] Calibration saved to calibration.json")
+
+    def _load_calibration(self):
+        import json
+        import os
+        if os.path.exists("calibration.json"):
+            try:
+                with open("calibration.json", "r") as f:
+                    data = json.load(f)
+                self.tracker.apply_calibration(data["pinch"], data["release"], data["size"])
+                print("[AGENT] Calibration loaded from file.")
+            except Exception:
+                print("[AGENT] Failed to load calibration.")
 
     def _toggle_system(self):
         self.system_active = not self.system_active
@@ -103,7 +183,13 @@ class GestureControlApp:
         if not self.headless:
             frame = self.tracker.draw_hand_skeleton(frame, hands)
             
-        # 2. Logic Implementation
+        # 2. Calibration Mode
+        if self.is_calibrating and self.current_hand:
+            self._process_calibration(self.current_hand)
+            self._draw_calibration_hud(frame)
+            return frame # Skip other logic during calibration
+            
+        # 3. Logic Implementation
         if self.current_hand and self.system_active:
             h = self.current_hand
             nx, ny = h.center[0], h.center[1]
@@ -143,11 +229,32 @@ class GestureControlApp:
             
         return frame
 
+    def _draw_calibration_hud(self, frame):
+        """Draw calibration overlay with progress bar."""
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, 0), (self.width, self.height), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+        
+        progress = len(self.calib_samples) / 30.0
+        bar_w = 400
+        x = (self.width - bar_w) // 2
+        y = self.height // 2
+        
+        # Text
+        txt = "ADIM 1: Elinizi Açık Tutun" if self.calib_step == 0 else "ADIM 2: Tık Yapın ve Bekleyin"
+        cv2.putText(frame, txt, (x, y - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        
+        # Progress Bar
+        cv2.rectangle(frame, (x, y), (x + bar_w, y + 30), (100, 100, 100), -1)
+        cv2.rectangle(frame, (x, y), (x + int(bar_w * progress), y + 30), (0, 255, 0), -1)
+
     def _draw_hud(self, frame):
         """Modern AI HUD Overlay."""
         # Status Bar
         status_color = (0, 255, 0) if self.system_active else (0, 0, 255)
         status_text = "SYSTEM ONLINE" if self.system_active else "SYSTEM OFFLINE"
+        if self.tracker.is_calibrated: status_text += " | CALIBRATED"
+        
         cv2.rectangle(frame, (0, self.height-40), (self.width, self.height), (20, 20, 20), -1)
         cv2.putText(frame, status_text, (20, self.height-12), cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
         
@@ -205,6 +312,7 @@ class GestureControlApp:
                     if key == ord('d'): self.show_debug = not self.show_debug
                     if key == ord('m'): self._toggle_system()
                     if key == ord('v'): self.voice.listen_once()
+                    if key == ord('c'): self._start_calibration()
                     
         finally:
             self.cap.release()
