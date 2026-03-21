@@ -11,3 +11,4 @@ pyobjc-core==11.1
 pyobjc==11.1
 google-generativeai
 python-dotenv
+rumps

@@ -25,6 +25,8 @@ cat > Info.plist <<EOF
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
     <string>2.0</string>
+    <key>LSUIElement</key>
+    <true/>
 </dict>
 </plist>
 EOF
@@ -46,6 +48,8 @@ EOF
     --hidden-import "google.generativeai" \
     --hidden-import "PIL" \
     --hidden-import "PIL.Image" \
+    --hidden-import "rumps" \
+    --hidden-import "tkinter" \
     launcher.py
 
 # 4. Apply Info.plist to the bundle

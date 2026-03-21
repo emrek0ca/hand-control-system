@@ -331,6 +331,15 @@ class GestureControlApp:
             cv2.putText(frame, line, (20, y), cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
             y += 25
 
+    def set_sensitivity(self, pinch_thresh: float, velocity_lock: float, smoothing_alpha: float):
+        """Update tracker and physics thresholds dynamically."""
+        if hasattr(self, 'tracker') and hasattr(self, 'controller'):
+            self.tracker.PINCH_THRESH = pinch_thresh
+            self.tracker.VELOCITY_LOCK = velocity_lock
+            self.controller.base_alpha_min = max(0.01, smoothing_alpha * 0.1)
+            self.controller.base_alpha_max = min(0.99, smoothing_alpha)
+            print(f"[AGENT] Sensitivity Updated: Pinch={pinch_thresh:.2f}, VelLock={velocity_lock:.2f}, Alpha={smoothing_alpha:.2f}")
+
     def run(self):
         last_time = time.time()
         f_count = 0

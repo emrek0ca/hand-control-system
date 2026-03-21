@@ -29,8 +29,17 @@ def run_transparent_intro():
     # Window settings: Transparent, No borders, Always on top
     root.overrideredirect(True)
     root.attributes("-topmost", True)
-    root.attributes("-transparent", "black") # Makes black background invisible
-    root.config(bg="black")
+    
+    if sys.platform == "darwin":
+        # macOS specific transparency
+        root.attributes("-transparent", True)
+        root.config(bg="systemTransparent")
+        bg_color = "systemTransparent"
+    else:
+        # Windows/Linux fallback
+        root.attributes("-transparentcolor", "black")
+        root.config(bg="black")
+        bg_color = "black"
     
     # Center the window
     win_w, win_h = 800, 400
@@ -40,11 +49,11 @@ def run_transparent_intro():
 
     # Text Frame
     label = tk.Label(root, text="MERHABA", font=("Helvetica", 80, "bold"), 
-                     fg="#00FFFF", bg="black")
+                     fg="#00FFFF", bg=bg_color)
     label.pack(expand=True)
     
     sub_label = tk.Label(root, text="AI AGENT INITIALIZING...", font=("Courier", 14), 
-                         fg="#AAAAAA", bg="black")
+                         fg="#AAAAAA", bg=bg_color)
     sub_label.pack()
 
     # Simple Fade In/Out Animation
@@ -64,12 +73,13 @@ def run_transparent_intro():
     root.mainloop()
 
 def start_main():
-    """Launch the main AI Agent loop."""
+    """Launch the main AI Agent loop in background and start menu."""
     try:
-        from main import GestureControlApp
+        from menu_app import HandControlMenuApp
         # Ensure we are in the right directory for relative assets
         os.chdir(os.path.dirname(os.path.abspath(sys.argv[0])))
-        app = GestureControlApp()
+        app = HandControlMenuApp()
+        app.start_agent_thread()
         app.run()
     except Exception as e:
         # Log error to a file if it's a bundled app to debug crashes
