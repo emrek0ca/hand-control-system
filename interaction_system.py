@@ -83,6 +83,46 @@ class TrailManager:
             cv2.line(frame, (p1[0], p1[1]), (p2[0], p2[1]), color, thickness, cv2.LINE_AA)
 
 
+class Particle:
+    """A single liquid glass particle."""
+    def __init__(self, x, y, vx, vy, color):
+        self.x, self.y = x, y
+        self.vx, self.vy = vx, vy
+        self.life = 1.0  # 1.0 to 0.0
+        self.decay = 0.02 + np.random.random() * 0.03
+        self.color = color
+        self.size = 2 + np.random.random() * 3
+
+    def update(self):
+        self.x += self.vx
+        self.y += self.vy
+        self.life -= self.decay
+        self.size *= 0.95
+        return self.life > 0
+
+class ParticleEngine:
+    """High-performance particle management system."""
+    def __init__(self, max_particles: int = 150):
+        self.particles: List[Particle] = []
+        self.max_particles = max_particles
+
+    def spawn(self, x, y, vx, vy, color, count=1):
+        for _ in range(count):
+            if len(self.particles) < self.max_particles:
+                svx = vx * 0.3 + (np.random.random() - 0.5) * 5
+                svy = vy * 0.3 + (np.random.random() - 0.5) * 5
+                self.particles.append(Particle(x, y, svx, svy, color))
+
+    def update(self):
+        self.particles = [p for p in self.particles if p.update()]
+
+    def draw(self, frame: np.ndarray):
+        for p in self.particles:
+            alpha = p.life
+            color = tuple(int(c * alpha) for c in p.color)
+            cv2.circle(frame, (int(p.x), int(p.y)), int(p.size), color, -1, cv2.LINE_AA)
+
+
 class GlassRenderer:
     """Handles professional Glassmorphism rendering in OpenCV."""
     
@@ -92,26 +132,16 @@ class GlassRenderer:
                         glow: float = 0.0, label: str = "") -> None:
         """Draws a semi-transparent 'glass' rectangle with optional glow."""
         overlay = frame.copy()
-        
-        # 1. Main Glass Surface
         cv2.rectangle(overlay, (x, y), (x + w, y + h), color, -1)
-        
-        # 2. Frost/Blur (Simplified: slightly lighter alpha for the area)
         cv2.addWeighted(overlay, opacity, frame, 1 - opacity, 0, frame)
-        
-        # 3. Glass Edge (Bright highlight)
         edge_color = (255, 255, 255)
-        edge_opacity = 0.6 + (glow * 0.4)
         cv2.rectangle(frame, (x, y), (x + w, y + h), edge_color, 1, cv2.LINE_AA)
         
-        # 4. Liquid Glow Effect
         if glow > 0:
             for i in range(1, 4):
                 alpha = (glow * 0.3) / i
-                glow_color = color
-                cv2.rectangle(frame, (x-i, y-i), (x+w+i, y+h+i), glow_color, 1, cv2.LINE_AA)
+                cv2.rectangle(frame, (x-i, y-i), (x+w+i, y+h+i), color, 1, cv2.LINE_AA)
         
-        # 5. Clean Typography (No Emojis)
         if label:
             font = cv2.FONT_HERSHEY_DUPLEX
             scale = 0.55
@@ -119,8 +149,6 @@ class GlassRenderer:
             text_size = cv2.getTextSize(label, font, scale, thickness)[0]
             tx = x + (w - text_size[0]) // 2
             ty = y + (h + text_size[1]) // 2
-            
-            # Subtle shadow for text
             cv2.putText(frame, label, (tx+1, ty+1), font, scale, (0, 0, 0), thickness, cv2.LINE_AA)
             cv2.putText(frame, label, (tx, ty), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
 
@@ -129,15 +157,10 @@ class GlassRenderer:
                   color: Tuple[int, int, int], intensity: float):
         """Draws a pulsing glowing aura around a point."""
         if intensity <= 0: return
-        
-        # Pulsing logic
         pulse = 1.0 + 0.1 * np.sin(time.time() * 5)
         r = int(radius * pulse)
-        
         for i in range(1, 5):
-            alpha = (intensity * 0.4) / i
             cv2.circle(frame, center, r + i*2, color, 1, cv2.LINE_AA)
-        
         cv2.circle(frame, center, r, (255, 255, 255), 1, cv2.LINE_AA)
 
 
@@ -150,43 +173,46 @@ class InteractionManager:
         self.objects: List[InteractiveObject] = []
         self.active_object: Optional[InteractiveObject] = None
         self.trail = TrailManager()
+        self.particles = ParticleEngine()
 
     def add_object(self, obj: InteractiveObject):
         self.objects.append(obj)
 
-    def check_interactions(self, pointer: Tuple[int, int], clicked: bool):
+    def check_interactions(self, pointer: Tuple[int, int], clicked: bool, velocity: Tuple[float, float] = (0, 0)):
         p = Point(pointer[0], pointer[1])
         self.active_object = None
         self.trail.add_point(pointer[0], pointer[1])
+        
+        # Spawn particles based on velocity
+        speed = np.sqrt(velocity[0]**2 + velocity[1]**2)
+        if speed > 5:
+            self.particles.spawn(pointer[0], pointer[1], velocity[0], velocity[1], (0, 255, 255), count=2)
         
         for obj in self.objects:
             obj.update_animation()
             obj.is_hovered = obj.contains_point(p)
             
-            # Liquid Glow Animation
             if obj.is_hovered:
                 obj.glow_intensity = min(1.0, obj.glow_intensity + 0.2)
                 self.active_object = obj
+                # Interaction particles
+                if clicked:
+                    self.particles.spawn(pointer[0], pointer[1], 0, 0, obj.color, count=10)
             else:
                 obj.glow_intensity = max(0.0, obj.glow_intensity - 0.1)
                 
             if clicked and obj.is_hovered and obj.on_click:
                 obj.on_click()
+        
+        self.particles.update()
 
     def draw(self, frame: np.ndarray) -> np.ndarray:
-        # 1. Draw Trail
         self.trail.draw(frame)
-        
-        # 2. Draw Objects
+        self.particles.draw(frame)
         for obj in self.objects:
             x, y = int(obj.position.x), int(obj.position.y)
             w, h = obj.size
-            
-            GlassRenderer.draw_glass_rect(
-                frame, x, y, w, h, 
-                obj.color, obj.opacity, 
-                obj.glow_intensity, obj.label
-            )
+            GlassRenderer.draw_glass_rect(frame, x, y, w, h, obj.color, obj.opacity, obj.glow_intensity, obj.label)
         return frame
 
 
