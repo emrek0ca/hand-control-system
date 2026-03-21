@@ -1,12 +1,12 @@
 """
 Hand Gesture Control System - PRO Version
-Application: AI-Driven Multimodal Interaction Agent (Liquid Glass UI)
+Application: AI-Driven Multimodal Interaction Agent (Liquid Glass UX)
 """
 
 import cv2
 import numpy as np
 from hand_tracker import HandTracker, GestureType, GestureState
-from interaction_system import DashboardBuilder, GlassRenderer
+from interaction_system import DashboardBuilder, GlassRenderer, Point
 from voice_system import VoiceCommandEngine, VoiceState
 from system_control import SystemController
 from advanced_features import AdvancedGestureRecognizer, GestureSequence
@@ -45,6 +45,7 @@ class GestureControlApp:
         self.current_hand = None
         self.last_swipe = None
         self.swipe_time = 0
+        self.aura_intensity = 0.0
         
         # Calibration State
         self.is_calibrating = False
@@ -59,18 +60,21 @@ class GestureControlApp:
         # Voice Commands Registry
         self.commands = self._setup_commands()
         
-        # Performance
+        # Performance & Automation
         self.fps = 0
         self.frame_count = 0
+        self.last_context_update = 0
         self._load_calibration()
 
     def _setup_ui(self):
         """Build the fütüristic Liquid Glass HUD overlay."""
-        # Top-left control panel
+        # Main Control Group
         self.dashboard.add_button(10, 10, 140, 45, "DEBUG", lambda: setattr(self, 'show_debug', not self.show_debug), color=(40, 40, 80))
         self.dashboard.add_button(160, 10, 140, 45, "CONTROL", self._toggle_system, color=(40, 80, 40))
         self.dashboard.add_button(310, 10, 140, 45, "VOICE", self.voice.listen_once, color=(80, 40, 40))
         self.dashboard.add_button(460, 10, 140, 45, "CALIBRATE", self._start_calibration, color=(80, 80, 40))
+        # Smart Context Button (Will be updated by LLM)
+        self.smart_btn = self.dashboard.add_button(610, 10, 160, 45, "AI AGENT", self._llm_describe_screen, color=(100, 40, 100))
 
     def _setup_commands(self):
         """Define multimodal voice commands (No Emojis)."""
@@ -84,6 +88,38 @@ class GestureControlApp:
             self.voice.create_command(["kalibrasyon", "başlat"], self._start_calibration, "Start Calibration"),
             self.voice.create_command(["ekranı", "anlat"], self._llm_describe_screen, "Analyze Screen"),
         ]
+
+    def _update_contextual_ui(self):
+        """Periodically update UI based on LLM's understanding of the context."""
+        if not self.llm.active or time.time() - self.last_context_update < 10.0:
+            return
+        
+        # Quick check of what's happening
+        desc = self.llm.analyze_frame(self.last_frame)
+        self.last_context_update = time.time()
+        
+        # Simple Logic: If browser or meeting is detected, change smart_btn label
+        if "tarayıcı" in desc.lower() or "google" in desc.lower():
+            self.smart_btn.label = "REFRESH TAB"
+            self.smart_btn.on_click = lambda: self.controller.press_key('f5')
+        elif "zoom" in desc.lower() or "toplantı" in desc.lower():
+            self.smart_btn.label = "MUTE MIC"
+            self.smart_btn.on_click = lambda: self.controller.press_key('m')
+        else:
+            self.smart_btn.label = "ANALYZE SCREEN"
+            self.smart_btn.on_click = self._llm_describe_screen
+
+    def _dodge_panels(self, pointer_px):
+        """Move UI panels away if the hand is covering them (Automation)."""
+        px, py = pointer_px
+        for obj in self.dashboard.get_manager().objects:
+            # If pointer is near the object, set a dodging target_position
+            dist = np.sqrt((obj.position.x + obj.size[0]/2 - px)**2 + (obj.position.y + obj.size[1]/2 - py)**2)
+            if dist < 100:
+                # Smoothly lower opacity instead of moving for better UX
+                obj.opacity = max(0.1, obj.opacity - 0.05)
+            else:
+                obj.opacity = min(0.4, obj.opacity + 0.02)
 
     def _start_calibration(self):
         self.is_calibrating = True
@@ -162,11 +198,14 @@ class GestureControlApp:
         hands = self.tracker.process_frame(frame)
         self.current_hand = hands[0] if hands else None
         
-        # 1. UI Interaction
+        # 1. UI Interaction & Automation
         pointer = self.current_hand.center if self.current_hand else (0, 0)
         pointer_px = (int(pointer[0] * self.width), int(pointer[1] * self.height))
         clicked = (self.current_hand.state == GestureState.CLICKED) if self.current_hand else False
+        
         self.dashboard.get_manager().check_interactions(pointer_px, clicked)
+        self._dodge_panels(pointer_px)
+        self._update_contextual_ui()
         
         # 2. Logic Implementation
         if self.current_hand and self.system_active and not self.is_calibrating:
@@ -198,15 +237,23 @@ class GestureControlApp:
 
         # 4. Professional Rendering
         if not self.headless:
+            # Aura logic
+            if self.current_hand:
+                self.aura_intensity = min(1.0, self.aura_intensity + 0.1)
+            else:
+                self.aura_intensity = max(0.0, self.aura_intensity - 0.05)
+            
             # Draw UI
             frame = self.dashboard.get_manager().draw(frame)
             if self.is_calibrating: self._draw_calibration_hud(frame)
             else: self._draw_hud(frame)
             
-            # Draw Hand
+            # Draw Hand Visuals
             if self.current_hand:
                 frame = self.tracker.draw_hand_skeleton(frame, hands)
-                cv2.circle(frame, pointer_px, 8, (255, 255, 255), 2, cv2.LINE_AA)
+                # Draw Aura
+                radius = int(40 + self.current_hand.z_depth * 100)
+                GlassRenderer.draw_aura(frame, pointer_px, radius, (0, 255, 255), self.aura_intensity)
             
         return frame
 
