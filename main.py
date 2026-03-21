@@ -203,7 +203,12 @@ class GestureControlApp:
         pointer_px = (int(pointer[0] * self.width), int(pointer[1] * self.height))
         clicked = (self.current_hand.state == GestureState.CLICKED) if self.current_hand else False
         
-        self.dashboard.get_manager().check_interactions(pointer_px, clicked)
+        # Calculate velocity in pixels for particle effects
+        v_px = (0, 0)
+        if self.current_hand:
+            v_px = (self.tracker.velocity[0] * self.width, self.tracker.velocity[1] * self.height)
+        
+        self.dashboard.get_manager().check_interactions(pointer_px, clicked, velocity=v_px)
         self._dodge_panels(pointer_px)
         self._update_contextual_ui()
         
