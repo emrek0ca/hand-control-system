@@ -9,6 +9,7 @@ from hand_tracker import HandTracker, GestureType, GestureState
 from interaction_system import DashboardBuilder
 from voice_system import VoiceCommandEngine, VoiceState
 from system_control import SystemController
+from advanced_features import AdvancedGestureRecognizer, GestureSequence
 import sys
 import time
 
@@ -33,12 +34,15 @@ class GestureControlApp:
         self.tracker = HandTracker(confidence_threshold=0.7)
         self.controller = SystemController()
         self.voice = VoiceCommandEngine(on_result=self._on_voice_command)
+        self.recognizer = AdvancedGestureRecognizer()
         
         # State
         self.system_active = True
         self.running = True
         self.show_debug = True
         self.current_hand = None
+        self.last_swipe = None
+        self.swipe_time = 0
         
         # Calibration State
         self.is_calibrating = False
@@ -221,6 +225,30 @@ class GestureControlApp:
             # Voice Mode Trigger (Special pose)
             if h.gesture == GestureType.VOICE_MODE:
                 self.voice.listen_once()
+                
+            # --- Swipe Logic ---
+            swipe = self.tracker.detect_swipe()
+            if swipe:
+                self.last_swipe = swipe
+                self.swipe_time = time.time()
+                print(f"[AGENT] SWIPE: {swipe}")
+                
+                # Perform Action
+                import platform
+                mod = 'command' if platform.system() == 'Darwin' else 'alt'
+                
+                if swipe == "RIGHT":
+                    self.controller.press_key('tab') # Simple tab for now or hotkey
+                    # For browser tab: ctrl+tab
+                    import pyautogui
+                    pyautogui.hotkey('ctrl', 'tab')
+                elif swipe == "LEFT":
+                    import pyautogui
+                    pyautogui.hotkey('ctrl', 'shift', 'tab')
+                elif swipe == "UP":
+                    self.controller.press_key('up')
+                elif swipe == "DOWN":
+                    self.controller.press_key('down')
 
         # 3. UI Rendering
         if not self.headless:
@@ -262,6 +290,12 @@ class GestureControlApp:
         v_state = self.voice.state.name
         cv2.putText(frame, f"VOICE ENGINE: {v_state}", (self.width-250, self.height-12), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+        
+        # Swipe Feedback
+        if self.last_swipe and time.time() - self.swipe_time < 1.0:
+            s_txt = f"SWIPE {self.last_swipe}!"
+            cv2.putText(frame, s_txt, (self.width//2 - 100, 100), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 0, 255), 3)
         
         if self.show_debug:
             self._draw_debug(frame)
