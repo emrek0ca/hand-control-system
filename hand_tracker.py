@@ -112,6 +112,9 @@ class HandTracker:
         # Kinematics
         self.prev_center = None
         self.velocity = 0.0
+        self.center_history = [] # For swipe detection
+        self.SWIPE_MIN_DIST = 0.15 # Minimum normalized distance for a swipe
+        self.SWIPE_MAX_TIME = 0.3  # Maximum seconds for a swipe gesture
         
         # Calibration Thresholds
         self.PINCH_THRESH = 0.12
@@ -137,6 +140,28 @@ class HandTracker:
                                  EMAFilter(self.filter_alpha), 
                                  EMAFilter(self.filter_alpha))
         return self.filters[idx]
+
+    def detect_swipe(self) -> Optional[str]:
+        """Detect rapid hand movements (flicks)."""
+        if len(self.center_history) < 3: return None
+        
+        start_pos, start_time = self.center_history[0]
+        end_pos, end_time = self.center_history[-1]
+        
+        dt = end_time - start_time
+        if dt > self.SWIPE_MAX_TIME or dt < 0.05: return None
+        
+        dx = end_pos[0] - start_pos[0]
+        dy = end_pos[1] - start_pos[1]
+        dist = np.sqrt(dx*dx + dy*dy)
+        
+        if dist < self.SWIPE_MIN_DIST: return None
+        
+        # Determine Direction
+        if abs(dx) > abs(dy):
+            return "RIGHT" if dx > 0 else "LEFT"
+        else:
+            return "DOWN" if dy > 0 else "UP"
 
     def process_frame(self, frame: np.ndarray) -> List[HandData]:
         h, w, _ = frame.shape
@@ -180,8 +205,14 @@ class HandTracker:
             pinch_dist = self._dist(thumb_tip, idx_tip) / hand_size
             mid_pinch = self._dist(thumb_tip, mid_tip) / hand_size
             
-            # Velocity
+            # Velocity & History
+            now = time.time()
             center = (np.mean([lm.x for lm in smoothed]), np.mean([lm.y for lm in smoothed]))
+            
+            self.center_history.append((center, now))
+            # Keep only last 0.5s for swipe
+            self.center_history = [(c, t) for c, t in self.center_history if now - t < 0.5]
+            
             if self.prev_center:
                 self.velocity = np.sqrt((center[0]-self.prev_center[0])**2 + (center[1]-self.prev_center[1])**2)
             self.prev_center = center
