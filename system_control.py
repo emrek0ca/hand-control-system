@@ -33,9 +33,13 @@ class SystemController:
         self.base_alpha_min = 0.05
         self.base_alpha_max = 0.90
         
-        # Scrolling
+        # Scrolling & Zooming
         self.prev_scroll_y = None
         self.scroll_threshold = 0.01
+        self.prev_z_depth = None
+        self.zoom_threshold = 0.02
+        self.last_zoom_time = 0
+        self.zoom_cooldown = 0.3 # Limit zoom speed
 
     def map_coordinates(self, x: float, y: float, z: float = 0.5) -> Tuple[int, int]:
         """
@@ -111,6 +115,33 @@ class SystemController:
             # Scale scroll by movement magnitude
             scroll_amount = int(-dy * 1500) # Negative for natural scrolling
             pyautogui.scroll(scroll_amount)
+
+    def zoom_adaptive(self, current_z: float) -> None:
+        """Zoom in/out based on hand distance (Z-depth) changes."""
+        if self.prev_z_depth is None:
+            self.prev_z_depth = current_z
+            return
+            
+        dz = current_z - self.prev_z_depth
+        now = time.time()
+        
+        # Larger z_depth = Closer to camera = Zoom IN
+        # Smaller z_depth = Farther from camera = Zoom OUT
+        if abs(dz) > self.zoom_threshold and (now - self.last_zoom_time) > self.zoom_cooldown:
+            modifier = 'command' if platform.system() == 'Darwin' else 'ctrl'
+            
+            if dz > 0: # Moving closer
+                pyautogui.hotkey(modifier, '+')
+                print("[SYSTEM] ZOOM IN")
+            else: # Moving away
+                pyautogui.hotkey(modifier, '-')
+                print("[SYSTEM] ZOOM OUT")
+                
+            self.last_zoom_time = now
+            self.prev_z_depth = current_z
+
+    def reset_zoom(self):
+        self.prev_z_depth = None
 
     def reset_scroll(self):
         self.prev_scroll_y = None
