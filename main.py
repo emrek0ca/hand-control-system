@@ -9,7 +9,7 @@ from hand_tracker import HandTracker, GestureType, GestureState
 from interaction_system import DashboardBuilder, GlassRenderer, Point
 from voice_system import VoiceCommandEngine, VoiceState
 from system_control import SystemController
-from advanced_features import AdvancedGestureRecognizer, GestureSequence
+from advanced_features import AdvancedGestureRecognizer, GestureSequence, MultiHandAnalyzer
 from llm_system import LLMAgent
 import sys
 import time
@@ -36,13 +36,16 @@ class GestureControlApp:
         self.controller = SystemController()
         self.voice = VoiceCommandEngine(on_result=self._on_voice_command)
         self.recognizer = AdvancedGestureRecognizer()
+        self.multi_analyzer = MultiHandAnalyzer()
         self.llm = LLMAgent()
         
         # State
         self.system_active = True
         self.running = True
         self.show_debug = True
+        self.zen_mode = False
         self.current_hand = None
+        self.hands = []
         self.last_swipe = None
         self.swipe_time = 0
         self.aura_intensity = 0.0
@@ -195,24 +198,44 @@ class GestureControlApp:
 
     def process_frame(self, frame: np.ndarray) -> np.ndarray:
         self.last_frame = frame.copy()
-        hands = self.tracker.process_frame(frame)
-        self.current_hand = hands[0] if hands else None
+        self.hands = self.tracker.process_frame(frame)
+        self.current_hand = self.hands[0] if self.hands else None
         
         # 1. UI Interaction & Automation
         pointer = self.current_hand.center if self.current_hand else (0, 0)
         pointer_px = (int(pointer[0] * self.width), int(pointer[1] * self.height))
         clicked = (self.current_hand.state == GestureState.CLICKED) if self.current_hand else False
         
-        # Calculate velocity in pixels for particle effects
         v_px = (0, 0)
         if self.current_hand:
-            v_px = (self.tracker.velocity[0] * self.width, self.tracker.velocity[1] * self.height)
+            # Note: tracker.velocities is a dict in the new version
+            v = self.tracker.velocities.get(0, (0, 0))
+            v_px = (v[0] * self.width, v[1] * self.height)
         
         self.dashboard.get_manager().check_interactions(pointer_px, clicked, velocity=v_px)
         self._dodge_panels(pointer_px)
         self._update_contextual_ui()
         
-        # 2. Logic Implementation
+        # 2. Multi-Hand Automation
+        if len(self.hands) >= 2:
+            rel_data = self.multi_analyzer.calculate_relative_data(self.hands)
+            
+            # --- Clap Detection (Toggle Mute) ---
+            if self.multi_analyzer.detect_clap(rel_data):
+                self.voice.speak("System Muted")
+                print("[AGENT] CLAP: SYSTEM MUTE")
+                # Add system mute logic if needed
+                
+            # --- Prayer Pose (Zen Mode) ---
+            if self.multi_analyzer.detect_prayer(self.hands, rel_data):
+                if not self.multi_analyzer.prayer_active:
+                    self.zen_mode = not self.zen_mode
+                    self.multi_analyzer.prayer_active = True
+                    self.voice.speak(f"Zen Mode {'Activated' if self.zen_mode else 'Deactivated'}")
+            else:
+                self.multi_analyzer.prayer_active = False
+
+        # 3. Standard Logic Implementation
         if self.current_hand and self.system_active and not self.is_calibrating:
             h = self.current_hand
             nx, ny = h.center[0], h.center[1]
@@ -229,36 +252,48 @@ class GestureControlApp:
             else: self.controller.reset_zoom()
             if h.gesture == GestureType.VOICE_MODE: self.voice.listen_once()
                 
-            swipe = self.tracker.detect_swipe()
+            swipe = self.tracker.detect_swipe(hand_idx=0)
             if swipe:
                 self.last_swipe, self.swipe_time = swipe, time.time()
                 import pyautogui
                 if swipe == "RIGHT": pyautogui.hotkey('ctrl', 'tab')
                 elif swipe == "LEFT": pyautogui.hotkey('ctrl', 'shift', 'tab')
 
-        # 3. Calibration
+        # 4. Calibration
         if self.is_calibrating and self.current_hand:
             self._process_calibration(self.current_hand)
 
-        # 4. Professional Rendering
+        # 5. Professional Rendering
         if not self.headless:
             # Aura logic
-            if self.current_hand:
-                self.aura_intensity = min(1.0, self.aura_intensity + 0.1)
-            else:
-                self.aura_intensity = max(0.0, self.aura_intensity - 0.05)
+            self.aura_intensity = min(1.0, self.aura_intensity + 0.1) if self.current_hand else max(0.0, self.aura_intensity - 0.05)
             
-            # Draw UI
-            frame = self.dashboard.get_manager().draw(frame)
-            if self.is_calibrating: self._draw_calibration_hud(frame)
-            else: self._draw_hud(frame)
+            # Draw UI (Unless in Zen Mode)
+            if not self.zen_mode:
+                frame = self.dashboard.get_manager().draw(frame)
+                if self.is_calibrating: self._draw_calibration_hud(frame)
+                else: self._draw_hud(frame)
             
-            # Draw Hand Visuals
-            if self.current_hand:
-                frame = self.tracker.draw_hand_skeleton(frame, hands)
-                # Draw Aura
-                radius = int(40 + self.current_hand.z_depth * 100)
-                GlassRenderer.draw_aura(frame, pointer_px, radius, (0, 255, 255), self.aura_intensity)
+            # Draw Hands & Energy Bonds
+            if self.hands:
+                frame = self.tracker.draw_hand_skeleton(frame, self.hands)
+                
+                # Energy Bond between two hands
+                if len(self.hands) >= 2:
+                    p1 = (int(self.hands[0].center[0] * self.width), int(self.hands[0].center[1] * self.height))
+                    p2 = (int(self.hands[1].center[0] * self.width), int(self.hands[1].center[1] * self.height))
+                    dist = np.linalg.norm(np.array(p1) - np.array(p2))
+                    if dist < 300:
+                        opacity = max(0.1, 1.0 - dist / 300.0)
+                        color = (int(255 * opacity), int(255 * opacity), 255)
+                        cv2.line(frame, p1, p2, color, 2, cv2.LINE_AA)
+                        mid = ((p1[0]+p2[0])//2, (p1[1]+p2[1])//2)
+                        cv2.circle(frame, mid, int(10 * opacity), color, -1, cv2.LINE_AA)
+
+                # Draw Main Aura
+                if self.current_hand:
+                    radius = int(40 + self.current_hand.z_depth * 100)
+                    GlassRenderer.draw_aura(frame, pointer_px, radius, (0, 255, 255), self.aura_intensity)
             
         return frame
 

@@ -190,41 +190,59 @@ class HandMotionTracker:
 
 
 class MultiHandAnalyzer:
-    """Çok elle analiz - İki el arasındaki ilişkiler"""
+    """Advanced analysis for interaction between two hands."""
     
-    @staticmethod
-    def calculate_hand_distance(hand1: HandData, hand2: HandData) -> float:
-        """İki el arasındaki mesafeyi hesapla"""
-        x_dist = hand1.center[0] - hand2.center[0]
-        y_dist = hand1.center[1] - hand2.center[1]
-        return np.sqrt(x_dist**2 + y_dist**2)
-    
-    @staticmethod
-    def detect_hand_interaction(hand1: HandData, hand2: HandData, 
-                               distance_threshold: float = 50) -> str:
-        """İki el arasındaki etkileşimi algıla"""
-        dist = MultiHandAnalyzer.calculate_hand_distance(hand1, hand2)
+    def __init__(self):
+        self.last_dist = 0
+        self.clap_cooldown = 0
+        self.prayer_active = False
+
+    def calculate_relative_data(self, hands: List[HandData]) -> dict:
+        """Compute distance and relative velocity between two hands."""
+        if len(hands) < 2: return {}
         
-        if dist < distance_threshold:
-            return "HANDS_CLOSE"
-        elif dist < distance_threshold * 2:
-            return "HANDS_NEAR"
-        else:
-            return "HANDS_FAR"
-    
-    @staticmethod
-    def detect_clapping() -> bool:
-        """Alkış hareketi algıla"""
-        # İki el arasında hızlı yaklaşma-uzaklaşma
-        # (İmplementasyon: motion tracker kullanılır)
-        pass
-    
-    @staticmethod
-    def detect_prayer_pose(hand1: HandData, hand2: HandData) -> bool:
-        """Dua pozisyonu algıla"""
-        # İki el paralel ve birbirlerine yakın
-        dist = MultiHandAnalyzer.calculate_hand_distance(hand1, hand2)
-        return dist < 80
+        h1, h2 = hands[0], hands[1]
+        p1, p2 = np.array(h1.center), np.array(h2.center)
+        dist = np.linalg.norm(p1 - p2)
+        
+        # Relative velocity (change in distance)
+        rel_vel = dist - self.last_dist
+        self.last_dist = dist
+        
+        return {
+            'distance': dist,
+            'rel_velocity': rel_vel,
+            'midpoint': ((p1[0] + p2[0])/2, (p1[1] + p2[1])/2)
+        }
+
+    def detect_clap(self, rel_data: dict) -> bool:
+        """High relative velocity inwards + small distance = Clap."""
+        if not rel_data: return False
+        
+        now = time.time()
+        if now < self.clap_cooldown: return False
+        
+        # Condition: distance is small and getting smaller very fast
+        if rel_data['distance'] < 0.12 and rel_data['rel_velocity'] < -0.08:
+            self.clap_cooldown = now + 1.0 # 1s cooldown
+            return True
+        return False
+
+    def detect_prayer(self, hands: List[HandData], rel_data: dict) -> bool:
+        """Hands parallel and touching = Prayer Pose (Zen Mode)."""
+        if len(hands) < 2 or not rel_data: return False
+        
+        # Parallel check: wrist-to-middle-finger vectors should be roughly opposite or parallel
+        # Simplified: distance is very small and velocity is low
+        if rel_data['distance'] < 0.08 and abs(rel_data['rel_velocity']) < 0.01:
+            return True
+        return False
+
+    def get_pinch_scale(self, rel_data: dict) -> float:
+        """Use inter-hand distance change for scaling."""
+        if not rel_data: return 1.0
+        # Return raw distance as a scale factor (normalized 0.0 to 1.0)
+        return rel_data['distance']
 
 
 class GestureCalibration:
