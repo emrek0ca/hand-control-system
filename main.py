@@ -10,6 +10,7 @@ from interaction_system import DashboardBuilder
 from voice_system import VoiceCommandEngine, VoiceState
 from system_control import SystemController
 from advanced_features import AdvancedGestureRecognizer, GestureSequence
+from llm_system import LLMAgent
 import sys
 import time
 
@@ -35,6 +36,7 @@ class GestureControlApp:
         self.controller = SystemController()
         self.voice = VoiceCommandEngine(on_result=self._on_voice_command)
         self.recognizer = AdvancedGestureRecognizer()
+        self.llm = LLMAgent() # Automatically checks for key
         
         # State
         self.system_active = True
@@ -81,6 +83,8 @@ class GestureControlApp:
             self.voice.create_command(["sağ", "tık"], lambda: self.controller.click('right'), "Sağ tık yap"),
             self.voice.create_command(["bunu", "sil"], self._multimodal_delete, "Tutulan nesneyi sil"),
             self.voice.create_command(["kalibrasyon", "başlat"], self._start_calibration, "Kişisel kalibrasyonu başlat"),
+            self.voice.create_command(["bu", "ne", "ekranda", "anlat"], self._llm_describe_screen, "Ekranı analiz et"),
+            self.voice.create_command(["bul", "tıkla", "git"], self._llm_semantic_nav, "Semantik navigasyon"),
         ]
 
     def _start_calibration(self):
@@ -169,14 +173,54 @@ class GestureControlApp:
         else:
              self.voice.speak("Silinecek bir nesne tutulmuyor.")
 
+    def _llm_describe_screen(self):
+        """Analyze current frame with Gemini and speak description."""
+        if not self.llm.active:
+            self.voice.speak("Zeka motoru bağlı değil.")
+            return
+
+        self.voice.speak("Ekranı analiz ediyorum, lütfen bekleyin...")
+        description = self.llm.analyze_frame(self.last_frame)
+        print(f"[AGENT] AI Vision: {description}")
+        self.voice.speak(description)
+
+    def _llm_semantic_nav(self, query: str = ""):
+        """Find an element by name and move mouse there."""
+        if not self.llm.active: return
+
+        self.voice.speak("Öğeyi arıyorum...")
+        target = query or "aktif buton" 
+        coords = self.llm.find_element(self.last_frame, target)
+
+        if coords:
+            nx, ny = coords
+            self.controller.move_mouse(nx, ny)
+            self.controller.click('left')
+            self.voice.speak(f"{target} bulundu ve tıklandı.")
+        else:
+            self.voice.speak("Maalesef öğeyi bulamadım.")
+
     def _on_voice_command(self, text: str):
         print(f"[VOICE] Raw: {text}")
         cmd = self.voice.match_command(text, self.commands)
         if cmd:
             print(f"[VOICE] Executing: {cmd['description']}")
-            cmd['action']()
+            # Handle semantic nav specially if it's the command
+            if cmd['description'] == "Semantik navigasyon":
+                self._llm_semantic_nav(text)
+            else:
+                cmd['action']()
+        elif self.llm.active:
+            # Fallback to LLM reasoning for non-predefined commands
+            response = self.llm.reason_command(text)
+            self.voice.speak(response)
         else:
             self.voice.speak("Komut anlaşılamadı.")
+
+    def _toggle_system(self):
+        self.system_active = not self.system_active
+        status = "aktif" if self.system_active else "pasif"
+        self.voice.speak(f"Sistem kontrolü {status}")
 
     def process_frame(self, frame: np.ndarray) -> np.ndarray:
         self.last_frame = frame.copy()
@@ -290,6 +334,12 @@ class GestureControlApp:
         v_state = self.voice.state.name
         cv2.putText(frame, f"VOICE ENGINE: {v_state}", (self.width-250, self.height-12), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+        
+        # LLM Brain Status
+        brain_color = (0, 255, 0) if self.llm.active else (150, 150, 150)
+        brain_text = "AI BRAIN: CONNECTED" if self.llm.active else "AI BRAIN: OFFLINE"
+        cv2.putText(frame, brain_text, (self.width//2 - 80, self.height-12), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, brain_color, 2)
         
         # Swipe Feedback
         if self.last_swipe and time.time() - self.swipe_time < 1.0:
