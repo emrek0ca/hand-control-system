@@ -126,6 +126,12 @@ class GestureControlApp:
             else:
                 self.controller.reset_scroll()
                 
+            # Zoom Control (Using PEACE pose)
+            if h.gesture == GestureType.PEACE:
+                self.controller.zoom_adaptive(h.z_depth)
+            else:
+                self.controller.reset_zoom()
+                
             # Voice Mode Trigger (Special pose)
             if h.gesture == GestureType.VOICE_MODE:
                 self.voice.listen_once()
@@ -164,7 +170,8 @@ class GestureControlApp:
             f"FPS: {self.fps}",
             f"STATE: {self.current_hand.state.name if self.current_hand else 'NONE'}",
             f"GESTURE: {self.current_hand.gesture.name if self.current_hand else 'NONE'}",
-            f"VELOCITY: {self.current_hand.velocity:.4f}" if self.current_hand else "VELOCITY: 0"
+            f"VELOCITY: {self.current_hand.velocity:.4f}" if self.current_hand else "VELOCITY: 0",
+            f"Z-DEPTH: {self.current_hand.z_depth:.4f}" if self.current_hand else "Z-DEPTH: 0"
         ]
         for line in debug_info:
             cv2.putText(frame, line, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
