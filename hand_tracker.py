@@ -57,6 +57,7 @@ class HandData:
     velocity: float = 0.0
     pinch_ratio: float = 0.0
     scroll_y: float = 0.0
+    z_depth: float = 0.0  # Added for 3D interaction
     # Rolling average for stability
     smoothed_landmarks: List[HandLandmark] = field(default_factory=list)
 
@@ -101,6 +102,7 @@ class HandTracker:
         # Jitter Filtering
         self.filters = {} # Map of index -> (EMA_x, EMA_y, EMA_z)
         self.filter_alpha = 0.6
+        self.z_filter = EMAFilter(alpha=0.4) # Specific filter for Z-axis stability
         
         # FSM State
         self.state = GestureState.IDLE
@@ -152,6 +154,12 @@ class HandTracker:
             hand_size = np.sqrt((wrist.x - mcp.x)**2 + (wrist.y - mcp.y)**2)
             if hand_size < 0.01: hand_size = 0.01
             
+            # Z-Depth: Normalized hand size is our best proxy for distance
+            # Larger hand_size = closer to camera = smaller Z-depth (or larger if we invert)
+            # Let's use raw hand_size as the basis and smooth it.
+            z_raw = hand_size
+            z_smooth = self.z_filter.apply(z_raw)
+            
             # Distances (Normalized)
             idx_tip = smoothed[self.INDEX_TIP]
             mid_tip = smoothed[self.MIDDLE_TIP]
@@ -180,7 +188,8 @@ class HandTracker:
                 is_valid=True,
                 state=self.state,
                 velocity=self.velocity,
-                pinch_ratio=pinch_dist
+                pinch_ratio=pinch_dist,
+                z_depth=z_smooth
             )
             
             if self.state == GestureState.SCROLLING:
