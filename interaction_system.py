@@ -92,13 +92,15 @@ class Particle:
         self.life = 1.0  
         self.decay = 0.01 + np.random.random() * 0.02
         self.color = color
-        self.base_size = 2 + np.random.random() * 4
+        self.size = 2 + np.random.random() * 4
+        self.base_size = self.size # For 3D scaling
 
     def update(self):
         self.x += self.vx
         self.y += self.vy
         self.z += self.vz
         self.life -= self.decay
+        self.size *= 0.95
         return self.life > 0
 
 class IntroManager:
@@ -282,6 +284,9 @@ class InteractionManager:
             GlassRenderer.draw_glass_rect(frame, x, y, w, h, obj.color, obj.opacity, obj.glow_intensity, obj.label)
         return frame
 
+    def draw_objects(self, frame: np.ndarray) -> np.ndarray:
+        return self.draw(frame)
+
 
 class DashboardBuilder:
     """API for building the automation dashboard."""
@@ -301,6 +306,20 @@ class DashboardBuilder:
         )
         self.manager.add_object(btn)
         return btn
+
+    def add_draggable_widget(self, x, y, w, h, label, callback=None, color=(72, 72, 72)):
+        widget = InteractiveObject(
+            object_id=label,
+            obj_type=ObjectType.WIDGET,
+            position=Point(x, y),
+            size=(w, h),
+            label=label,
+            color=color,
+            on_click=callback,
+            is_dragging=True,
+        )
+        self.manager.add_object(widget)
+        return widget
 
     def get_manager(self):
         return self.manager

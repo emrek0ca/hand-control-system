@@ -4,26 +4,36 @@ Powered by Google Gemini for multimodal reasoning and visual analysis.
 """
 
 import os
+from typing import Optional, Tuple
+
 import cv2
-import PIL.Image
-import google.generativeai as genai
-from typing import Optional, Tuple, Dict
 from dotenv import load_dotenv
+
+try:
+    import PIL.Image
+except Exception:  # pragma: no cover - optional dependency
+    PIL = None
+
+try:
+    import google.generativeai as genai
+except Exception:  # pragma: no cover - optional dependency
+    genai = None
 
 load_dotenv()
 
 class LLMAgent:
     """Multimodal AI Agent for Screen Understanding and Reasoning."""
     
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, model_name: str = "gemini-2.0-flash", enabled: bool = True):
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self.model_name = model_name
+        self.enabled = enabled
         self.active = False
         
-        if self.api_key:
+        if self.enabled and self.api_key and genai and PIL:
             try:
                 genai.configure(api_key=self.api_key)
-                # Using Gemini 2.0 Flash for low latency and multimodal power
-                self.model = genai.GenerativeModel('gemini-2.0-flash')
+                self.model = genai.GenerativeModel(self.model_name)
                 self.active = True
                 print("[LLM] Brain Connected Successfully.")
             except Exception as e:
@@ -31,9 +41,26 @@ class LLMAgent:
         else:
             print("[LLM] No API Key provided. Brain is Offline.")
 
+    def configure(self, enabled: Optional[bool] = None, model_name: Optional[str] = None):
+        if enabled is not None:
+            self.enabled = bool(enabled)
+        if model_name:
+            self.model_name = model_name
+
+        self.active = False
+        if not self.enabled or not self.api_key or not genai or not PIL:
+            return
+        try:
+            genai.configure(api_key=self.api_key)
+            self.model = genai.GenerativeModel(self.model_name)
+            self.active = True
+        except Exception as e:
+            print(f"[LLM] Reconfigure Failed: {e}")
+
     def analyze_frame(self, frame_bgr) -> str:
         """Describe what is currently on the screen."""
-        if not self.active: return "AI Brain is currently offline."
+        if not self.active or not genai or not PIL:
+            return "AI Brain is currently offline."
         
         try:
             # Convert BGR to RGB for PIL
@@ -51,7 +78,8 @@ class LLMAgent:
         Find coordinates of an element based on description.
         Returns normalized (x, y) coordinates or None.
         """
-        if not self.active: return None
+        if not self.active or not genai or not PIL:
+            return None
         
         try:
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -84,7 +112,8 @@ class LLMAgent:
 
     def reason_command(self, query: str) -> str:
         """Process complex text queries for logical reasoning."""
-        if not self.active: return "Zeka motoru devre dışı."
+        if not self.active or not genai:
+            return "Zeka motoru devre dışı."
         
         try:
             prompt = f"Sen bir bilgisayar kontrol asistanısın. Kullanıcının şu isteğini yorumla ve kısa, aksiyon odaklı bir cevap ver: '{query}'"

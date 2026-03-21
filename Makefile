@@ -16,7 +16,7 @@ install:
 
 run:
 	@echo "Starting Hand Gesture Control System..."
-	python main.py
+	python launcher.py
 
 test:
 	@echo "Running test suite..."

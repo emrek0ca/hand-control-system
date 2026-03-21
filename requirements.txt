@@ -4,11 +4,10 @@ numpy==1.24.3
 scipy==1.11.4
 pyttsx3==2.90
 SpeechRecognition==3.10.0
-pyaudio==0.2.13
 pyautogui==0.9.54
 pynput==1.8.1
-pyobjc-core==11.1
-pyobjc==11.1
 google-generativeai
 python-dotenv
-rumps
+rumps; platform_system == "Darwin"
+pyobjc-core==11.1; platform_system == "Darwin"
+pyobjc==11.1; platform_system == "Darwin"

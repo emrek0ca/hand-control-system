@@ -35,4 +35,5 @@ Bu projede çalışan ajanlar aşağıdaki araçları kullanır:
 - `system_control.py` -> Low-level OS API
 - `voice_system.py` -> Audio/NLP Pipeline
 - `interaction_system.py` -> UI Overlay System
-- `config.py` -> Hyperparameter Tuning
+- `settings_manager.py` -> Profile, per-hand binding, and parameter tuning
+- `settings_panel.py` -> User-facing configuration panel with themes

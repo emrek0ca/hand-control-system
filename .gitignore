@@ -23,3 +23,9 @@ Thumbs.db
 dist/
 build/
 *.egg-info/
+
+# Generated runtime/build artifacts
+/Info.plist
+/crash_log.txt
+/calibration.json
+/cap_*.png

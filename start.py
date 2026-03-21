@@ -49,8 +49,8 @@ def print_menu():
         - Hareket sekvansları
 
     6️⃣  ⚙️  AYARLAR VE KONFİGURASYON
-        - config.py dosyasını düzenle
-        - Parametreleri optimize et
+        - Settings panelini aç
+        - Profilleri ve komut eşlemesini yönet
 
     7️⃣  🧹 TEMIZLIK VE MAİNTENANS
         - Geçici dosyaları sil
@@ -73,7 +73,7 @@ def option_1_setup():
 def option_2_run():
     """Uygulamayı çalıştır"""
     print("\n▶️  UYGULAMA BAŞLANIYOR...\n")
-    os.system("python main.py")
+    os.system("python launcher.py")
 
 def option_3_test():
     """Test çalıştır"""
@@ -87,7 +87,7 @@ def option_4_docs():
     docs_menu = """
     1. README.md (Detaylı dokümantasyon)
     2. QUICKSTART.md (Hızlı başlangıç)
-    3. config.py (Ayarlar)
+    3. Settings Panel (Ayarlar)
     
     Seç (1-3, 0: Geri): """
     
@@ -96,7 +96,6 @@ def option_4_docs():
     docs = {
         '1': 'README.md',
         '2': 'QUICKSTART.md',
-        '3': 'config.py',
     }
     
     if choice in docs:
@@ -105,6 +104,8 @@ def option_4_docs():
             os.system(f"cat {filename} | less" if sys.platform != "win32" else f"more {filename}")
         else:
             print(f"❌ {filename} bulunamadı")
+    elif choice == '3':
+        os.system("python launcher.py --settings-panel")
 
 def option_5_demo():
     """Demo çalıştır"""
@@ -125,12 +126,13 @@ def option_5_demo():
         print("\n💡 Temel örnekler hakkında:\n")
         print("""
         Temel etkileşim örneği main.py'de bulunmaktadır.
-        
+
         Ayrıca şu işlemleri yapabilirsiniz:
         - İşaret parmağını kullanarak pointer oluştur
         - Tutma hareketi ile nesneleri sürükle
         - Ses modu ile komut ver
-        
+        - Settings panelinden tüm ayarları yönet
+
         Daha fazla bilgi için QUICKSTART.md'i okuyun.
         """)
 
@@ -141,16 +143,15 @@ def option_6_config():
     config_menu = """
     Ayarlanabilir Parametreler:
     
-    config.py dosyasında:
-    - CAMERA_CONFIG: Kamera ayarları
-    - HAND_TRACKING_CONFIG: El izleme
-    - GESTURE_CONFIG: Hareket tanıma
-    - UI_CONFIG: Arayüz ayarları
-    - VOICE_CONFIG: Ses ayarları
-    
-    Düzenlemek için: nano config.py
-    (veya favori metin editörünüzü kullanın)
-    """)
+    Settings panelinde:
+    - Kamera ayarları
+    - El izleme ve hareket eşlemesi
+    - Mouse yönü, gain, smoothing
+    - UI ve performans ayarları
+    - Voice ve AI seçenekleri
+
+    Açmak için: python launcher.py --settings-panel
+    """
     print(config_menu)
 
 def option_7_clean():
@@ -184,6 +185,8 @@ def option_8_structure():
     ├── 📄 main.py                  (Ana uygulama)
     │   └─ GestureControlApp sınıfı
     │   └─ Ekran, ses ve hareket yönetimi
+    ├── 📄 launcher.py              (Platforma göre giriş noktası)
+    │   └─ macOS menü çubuğu / direkt uygulama seçimi
     │
     ├── 📄 hand_tracker.py           (El izleme sistemi)
     │   └─ HandTracker sınıfı
@@ -197,7 +200,6 @@ def option_8_structure():
     │
     ├── 📄 voice_system.py           (Ses ve dikte)
     │   └─ VoiceCommandEngine sınıfı
-    │   └─ KeyboardSimulator sınıfı
     │   └─ Ses tanıma ve TTS
     │
     ├── 📄 advanced_features.py      (İleri özellikler)
@@ -209,13 +211,20 @@ def option_8_structure():
     ├── 📄 advanced_demo.py          (Demo uygulaması)
     │   └─ Gelişmiş özellikler gösterimi
     │
-    ├── 📄 config.py                 (Ayarlar)
-    │   └─ Tüm parametreler
-    │   └─ Renk şeması
+    ├── 📄 settings_panel.py         (Detaylı ayarlar paneli)
+    │   └─ Profil yönetimi
+    │   └─ Global ve el bazlı gesture/action eşlemesi
+    │   └─ Tema, UI ve performans ayarları
+    ├── 📄 settings_manager.py       (Kalıcı ayarlar deposu)
+    │   └─ JSON profil sistemi
+    │   └─ Per-hand override desteği
     │
     ├── 📄 install.py                (Kurulum scripti)
     │   └─ Bağımlılık kurma
     │   └─ Ortam hazırlama
+    │
+    ├── 📄 runtime_paths.py          (Kullanıcı verisi yolları)
+    │   └─ Kalibrasyon, log ve ekran görüntüleri
     │
     ├── 📄 test.py                   (Test scripti)
     │   └─ Sistem testleri
@@ -233,21 +242,22 @@ def option_8_structure():
     
     🎯 HandTracker (hand_tracker.py)
     ├─ process_frame(frame) → List[HandData]
-    ├─ _detect_gesture(landmarks) → GestureType
+    ├─ apply_calibration(pinch, release, size)
+    ├─ detect_swipe(hand_idx=0) → str
     ├─ draw_hand_skeleton(frame, hand_data)
-    └─ get_finger_positions(hand_data) → dict
-    
+    └─ HandData.velocity_vector
+
     🎯 InteractionManager (interaction_system.py)
     ├─ add_object(obj) → None
-    ├─ check_interactions(pointer, grab_active)
-    ├─ get_object_at_point(point) → InteractiveObject
-    └─ draw_objects(frame)
+    ├─ add_draggable_widget(x, y, w, h, label, callback=None)
+    ├─ check_interactions(pointer, clicked, velocity=(0, 0))
+    └─ draw(frame)
     
     🎯 VoiceCommandEngine (voice_system.py)
-    ├─ start_listening() → None
-    ├─ process_dictation() → str
-    ├─ create_voice_command(cmd, action) → dict
-    ├─ match_voice_command(text, commands) → dict
+    ├─ listen_once() → None
+    ├─ create_command(keywords, action) → dict
+    ├─ create_voice_command(command, action) → dict
+    ├─ match_command(text, commands) → dict
     └─ speak(text) → None
     
     ╔════════════════════════════════════════════════════════════╗
@@ -289,10 +299,13 @@ def option_8_structure():
     ║              ÖNEMLİ DEĞİŞKENLER                            ║
     ╚════════════════════════════════════════════════════════════╝
     
-    config.py'de:
-    • CAMERA_CONFIG['width/height']: Kamera çözünürlüğü
-    • HAND_TRACKING_CONFIG['confidence_threshold']: 0.7 optimal
-    • VOICE_CONFIG['language']: 'tr-TR' (Türkçe)
+settings_panel.py'de:
+• Kamera çözünürlüğü
+• El izleme hassasiyeti
+• Voice dili: 'tr-TR' (Türkçe)
+• Mouse yönü, gain ve smoothing
+• Her el için ayrı komut eşleme
+• Midnight / dark / light tema seçenekleri
     
     main.py'de:
     • self.pointer_position: Fare imleçi konumu

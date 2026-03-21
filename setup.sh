@@ -48,11 +48,8 @@ else
     exit 1
 fi
 
-# Klasörleri oluştur
 echo ""
-echo -e "${BLUE}📁 Klasörler oluşturuluyor...${NC}"
-mkdir -p screenshots logs models
-echo -e "${GREEN}✅ Klasörler oluşturuldu${NC}"
+echo -e "${BLUE}📁 Runtime klasörleri ilk açılışta kullanıcı dizininde oluşturulacak${NC}"
 
 # Testleri çalıştır (isteğe bağlı)
 echo ""
@@ -73,7 +70,7 @@ echo ""
 echo -e "${YELLOW}📚 SONRAKI ADIMLAR:${NC}"
 echo ""
 echo "1. 🚀 Uygulamayı çalıştır:"
-echo -e "   ${BLUE}python3 main.py${NC}"
+echo -e "   ${BLUE}python3 launcher.py${NC}"
 echo ""
 echo "2. 🎓 Dokümantasyonu oku:"
 echo -e "   ${BLUE}cat QUICKSTART.md${NC}"

@@ -8,6 +8,7 @@ import os
 import sys
 import subprocess
 import platform
+from runtime_paths import ensure_runtime_dirs
 
 def print_header(text):
     """Başlık yazdır"""
@@ -67,16 +68,8 @@ def install_requirements():
 def create_directories():
     """Gerekli klasörleri oluştur"""
     print_header("Klasörleri Oluşturma")
-    
-    directories = [
-        "screenshots",
-        "logs",
-        "models",
-    ]
-    
-    for directory in directories:
-        os.makedirs(directory, exist_ok=True)
-        print(f"✅ Klasör oluşturuldu/zaten mevcut: {directory}/")
+    data_dir = ensure_runtime_dirs()
+    print(f"✅ Runtime veri dizini hazır: {data_dir}")
 
 def test_installation():
     """Kurulumu test et"""
@@ -112,7 +105,7 @@ def print_instructions():
 📋 BAŞLANGÇ TALIMATLARI
 
 1️⃣  Uygulamayı Çalıştır:
-    python main.py
+    python launcher.py
 
 2️⃣  Kontroller:
     - İşaret Parmağı → Pointer (fare imleçi)
@@ -120,14 +113,15 @@ def print_instructions():
     - Tüm Parmaklar Açık → Ses modu
     - 'q' Tuşu → Çıkış
     - 'd' Tuşu → Debug modu
-    - 's' Tuşu → Ekran görüntüsü
+    - 'p' Tuşu → Settings paneli
+    - Settings paneli → Per-hand bindings, profile, and theme controls
 
 3️⃣  Ses Komutları (Türkçe):
     - "Ekran görüntüsü al"
     - "Ses devre dışı"
 
 📚 Daha Fazla Bilgi:
-    README.md dosyasını oku
+    README.md ve QUICKSTART.md dosyalarını oku
 
 🆘 Sorun Yaşıyorsanız:
     1. README.md'de "Yaygın Sorunlar" bölümünü kontrol et
