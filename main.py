@@ -116,6 +116,7 @@ class GestureControlApp:
         self.swipe_time = 0
         self.aura_intensity = 0.0
         self.last_frame = None
+        self._last_click_time = 0
         self.stats = {"voice_commands_executed": 0, "settings_reload_count": 0}
         self.frame_skip = 0
         self.fps_limit = 30
@@ -953,6 +954,16 @@ class GestureControlApp:
             if self.hands:
                 frame = self.tracker.draw_hand_skeleton(frame, self.hands)
                 
+                # --- State Labels HUD ---
+                for hand in self.hands:
+                    px, py = int(hand.center[0] * self.width), int(hand.center[1] * self.height)
+                    state_text = hand.state.name
+                    if hand.state == GestureState.CLICKED: state_text = "CLICK"
+                    elif hand.state == GestureState.GRABBING: state_text = "GRAB"
+                    elif hand.state == GestureState.SCROLLING: state_text = "SCROLL"
+                    
+                    cv2.putText(frame, state_text, (px + 30, py - 30), cv2.FONT_HERSHEY_DUPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
+
                 # Energy Bond between two hands
                 if len(self.hands) >= 2:
                     p1 = (int(self.hands[0].center[0] * self.width), int(self.hands[0].center[1] * self.height))
