@@ -159,8 +159,29 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
 def _normalize_data(raw: Dict[str, Any]) -> Dict[str, Any]:
     profiles = raw.get("profiles") or {}
     active_profile = raw.get("active_profile") or "Default"
+    
+    # Ensure Default profile exists
+    if "Default" not in profiles:
+        profiles["Default"] = copy.deepcopy(DEFAULT_SETTINGS)
+
+    # Add YouTube profile if it doesn't exist
+    if "YouTube" not in profiles:
+        yt = copy.deepcopy(DEFAULT_SETTINGS)
+        yt["gestures"]["gesture_actions"]["PEACE"] = "press_key"
+        yt["gestures"]["gesture_payloads"]["PEACE"] = "k" # Play/Pause
+        yt["gestures"]["gesture_actions"]["THUMBS_UP"] = "press_key"
+        yt["gestures"]["gesture_payloads"]["THUMBS_UP"] = "f" # Fullscreen
+        profiles["YouTube"] = yt
+
+    # Add VS Code profile if it doesn't exist
+    if "VS Code" not in profiles:
+        vsc = copy.deepcopy(DEFAULT_SETTINGS)
+        vsc["gestures"]["gesture_actions"]["THUMBS_UP"] = "next_tab"
+        vsc["gestures"]["gesture_actions"]["THUMBS_DOWN"] = "previous_tab"
+        profiles["VS Code"] = vsc
+
     if active_profile not in profiles:
-        profiles[active_profile] = copy.deepcopy(DEFAULT_SETTINGS)
+        active_profile = "Default"
 
     normalized_profiles: Dict[str, Dict[str, Any]] = {}
     for name, profile in profiles.items():

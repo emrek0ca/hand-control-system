@@ -185,7 +185,28 @@ class GestureControlApp:
             self.voice.create_command(["bunu", "sil"], self._multimodal_delete, "Delete Active Target"),
             self.voice.create_command(["kalibrasyon", "başlat"], self._start_calibration, "Start Calibration"),
             self.voice.create_command(["ekranı", "anlat"], self._llm_describe_screen, "Analyze Screen"),
+            self.voice.create_command(["tıkla", "şuna"], self._action_find_and_click, "Find and Click Element"),
         ]
+
+    def _action_find_and_click(self, description: str = ""):
+        if not self.llm.active or self.last_frame is None:
+            self._llm_unavailable()
+            return
+        
+        if not description:
+            # If no description provided by match_command, we might need to prompt or handle it
+            self.voice.speak("Neye tıklamamı istersiniz?")
+            return
+
+        self.voice.speak(f"{description} aranıyor...")
+        coords = self.llm.find_element(self.last_frame, description)
+        if coords:
+            self.controller.move_mouse(coords[0], coords[1])
+            time.sleep(0.2)
+            self.controller.click()
+            self.voice.speak("Tıklandı.")
+        else:
+            self.voice.speak("Öğe bulunamadı.")
 
     def _update_contextual_ui(self):
         """Periodically update UI based on LLM's understanding of the context."""
@@ -294,11 +315,47 @@ class GestureControlApp:
             return path.stat().st_mtime
         return 0.0
 
+    def get_active_window_title(self) -> str:
+        """Fetch the active window title for context-aware profiling."""
+        try:
+            if sys.platform == "darwin":
+                script = 'tell application "System Events" to get name of first process whose frontmost is true'
+                return subprocess.check_output(['osascript', '-e', script]).decode().strip()
+            elif sys.platform == "win32":
+                import ctypes
+                GetForegroundWindow = ctypes.windll.user32.GetForegroundWindow
+                GetWindowTextLength = ctypes.windll.user32.GetWindowTextLengthW
+                GetWindowText = ctypes.windll.user32.GetWindowTextW
+                hwnd = GetForegroundWindow()
+                length = GetWindowTextLength(hwnd)
+                buff = ctypes.create_unicode_buffer(length + 1)
+                GetWindowText(hwnd, buff, length + 1)
+                return buff.value
+        except Exception:
+            pass
+        return ""
+
     def _refresh_settings_if_needed(self):
         now = time.time()
         if now - self._last_settings_poll < self._settings_poll_interval:
             return
         self._last_settings_poll = now
+        
+        # --- App-Aware Profile Switching ---
+        if getattr(self, "_last_app_poll", 0) + 5.0 < now:
+            self._last_app_poll = now
+            title = self.get_active_window_title().lower()
+            target_profile = "Default"
+            if "youtube" in title or "safari" in title or "chrome" in title: # Safari/Chrome as proxy for YT
+                target_profile = "YouTube"
+            elif "code" in title or "vsc" in title:
+                target_profile = "VS Code"
+            
+            if target_profile != self.settings_manager.active_profile:
+                self.settings_manager.load_profile(target_profile)
+                self.apply_settings()
+                self.logger.info("profile_auto_switch", extra={"event": "profile_auto_switch", "profile": target_profile})
+
         current_mtime = self._read_settings_mtime()
         if current_mtime <= self._settings_mtime:
             return
@@ -705,7 +762,18 @@ class GestureControlApp:
     def _on_voice_command(self, text: str):
         cmd = self.voice.match_command(text, self.commands)
         if cmd:
-            cmd['action']()
+            action = cmd["action"]
+            args = cmd.get("args", "")
+            try:
+                # Try to call with args if it's a finding command or similar
+                import inspect
+                sig = inspect.signature(action)
+                if len(sig.parameters) > 0:
+                    action(args)
+                else:
+                    action()
+            except Exception:
+                action()
             self.stats["voice_commands_executed"] += 1
         elif self.llm.active:
             self.stats["voice_commands_executed"] += 1

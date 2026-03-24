@@ -143,22 +143,36 @@ class VoiceCommandEngine:
             self.state = VoiceState.IDLE
 
     def match_command(self, text: str, commands: List[dict]) -> Optional[dict]:
-        """Fuzzy match text against a list of registered commands."""
+        """Fuzzy match text against a list of registered commands and extract arguments."""
         text = text.lower()
         best_match = None
         max_score = 0
+        extracted_args = ""
         
         for cmd in commands:
             keywords = cmd.get("keywords") or [cmd.get("command", "")]
             score = 0
+            found_kws = []
             for kw in keywords:
                 if kw in text:
                     score += 1
+                    found_kws.append(kw)
             
+            if not found_kws:
+                continue
+
             rel_score = score / max(1, len(keywords))
-            if rel_score > 0.6 and rel_score > max_score:
+            if rel_score >= 0.6 and rel_score > max_score:
                 max_score = rel_score
-                best_match = cmd
+                best_match = cmd.copy()
+                
+                # Extract arguments: text that is not part of keywords
+                # Simple logic: take the text after the last found keyword
+                last_kw = found_kws[-1]
+                idx = text.find(last_kw)
+                if idx != -1:
+                    args = text[idx + len(last_kw):].strip()
+                    best_match["args"] = args
                 
         return best_match
 
