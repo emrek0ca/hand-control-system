@@ -29,6 +29,8 @@ class LLMAgent:
         self.model_name = model_name
         self.enabled = enabled
         self.active = False
+        self.failure_count = 0
+        self.max_failures = 3
         
         if self.enabled and self.api_key and genai and PIL:
             try:
@@ -38,8 +40,15 @@ class LLMAgent:
                 print("[LLM] Brain Connected Successfully.")
             except Exception as e:
                 print(f"[LLM] Connection Failed: {e}")
+                self.active = False
         else:
             print("[LLM] No API Key provided. Brain is Offline.")
+
+    def _handle_failure(self):
+        self.failure_count += 1
+        if self.failure_count >= self.max_failures:
+            print("[LLM] Critical failures exceeded. Deactivating AI module.")
+            self.active = False
 
     def configure(self, enabled: Optional[bool] = None, model_name: Optional[str] = None):
         if enabled is not None:
@@ -69,15 +78,14 @@ class LLMAgent:
             
             prompt = "Şu an ekranda ne olduğunu, aktif pencereleri ve önemli interaktif öğeleri kısaca açıkla. (Türkçe)"
             response = self.model.generate_content([prompt, img])
+            self.failure_count = 0 # Reset on success
             return response.text
         except Exception as e:
+            self._handle_failure()
             return f"Analiz hatası: {str(e)}"
 
     def find_element(self, frame_bgr, description: str) -> Optional[Tuple[float, float]]:
-        """
-        Find coordinates of an element based on description.
-        Returns normalized (x, y) coordinates or None.
-        """
+        """Find coordinates of an element with robust parsing and failure handling."""
         if not self.active or not genai or not PIL:
             return None
         
@@ -85,29 +93,28 @@ class LLMAgent:
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             img = PIL.Image.fromarray(frame_rgb)
             
-            # Request normalized coordinates [ymin, xmin, ymax, xmax]
             prompt = (f"Ekrandaki '{description}' öğesini bul ve koordinatlarını [ymin, xmin, ymax, xmax] formatında ver. "
                      "Sadece koordinat listesini döndür. Eğer bulamazsan 'NONE' yaz.")
             
             response = self.model.generate_content([prompt, img])
-            text = response.text.strip()
+            text = response.text.strip().upper()
             
-            if "NONE" in text or "[" not in text:
-                return None
+            if "NONE" in text: return None
             
-            # Simple parser for [ymin, xmin, ymax, xmax]
             import re
-            coords = re.findall(r"(\d+)", text)
-            if len(coords) >= 4:
-                # Convert from 0-1000 scale to 0.0-1.0
-                ymin, xmin, ymax, xmax = [int(c) / 1000.0 for c in coords[:4]]
-                center_x = (xmin + xmax) / 2
-                center_y = (ymin + ymax) / 2
+            # Improved regex to find anything that looks like [y, x, y, x]
+            match = re.search(r"\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]", text)
+            if match:
+                coords = [int(c) / 1000.0 for c in match.groups()]
+                center_x = (coords[1] + coords[3]) / 2 # (xmin + xmax) / 2
+                center_y = (coords[0] + coords[2]) / 2 # (ymin + ymax) / 2
+                self.failure_count = 0 # Reset on success
                 return (center_x, center_y)
             
             return None
         except Exception as e:
             print(f"[LLM] Search Error: {e}")
+            self._handle_failure()
             return None
 
     def reason_command(self, query: str) -> str:

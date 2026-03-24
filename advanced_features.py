@@ -194,18 +194,28 @@ class MultiHandAnalyzer:
     
     def __init__(self):
         self.last_dist = 0
+        self.dist_filter = None # Will be initialized on first use
         self.clap_cooldown = 0
         self.prayer_active = False
 
     def calculate_relative_data(self, hands: List[HandData]) -> dict:
-        """Compute distance and relative velocity between two hands."""
+        """Compute filtered distance and relative velocity between two hands."""
         if len(hands) < 2: return {}
         
         h1, h2 = hands[0], hands[1]
         p1, p2 = np.array(h1.center), np.array(h2.center)
-        dist = np.linalg.norm(p1 - p2)
+        raw_dist = np.linalg.norm(p1 - p2)
         
-        # Relative velocity (change in distance)
+        # 1. Stabilization Filter for Inter-hand distance
+        if self.dist_filter is None:
+            self.dist_filter = raw_dist
+        else:
+            # High smoothing for distance to keep zoom stable
+            self.dist_filter = 0.7 * self.dist_filter + 0.3 * raw_dist
+            
+        dist = self.dist_filter
+        
+        # 2. Precise Relative velocity (change in filtered distance)
         rel_vel = dist - self.last_dist
         self.last_dist = dist
         

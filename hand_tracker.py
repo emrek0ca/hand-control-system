@@ -211,14 +211,25 @@ class HandTracker:
         matched_ids = set()
         for det in detections:
             best_id = None
-            min_dist = self.max_id_distance
+            min_cost = 1.0 # Cost threshold
+            
+            det_hand = det["handedness"]
             
             for hid, hstate in self.hand_registry.items():
                 if hid in matched_ids: continue
+                
+                # Distance cost
                 dist = np.sqrt((det["center"][0] - hstate["prev_center"][0])**2 + 
                                (det["center"][1] - hstate["prev_center"][1])**2)
-                if dist < min_dist:
-                    min_dist = dist
+                
+                # Handedness penalty: If handedness changed, add high cost
+                # This prevents ID flipping when left and right hands are close
+                h_penalty = 0.0 if det_hand == hstate.get("handedness", "") else 0.5
+                
+                total_cost = dist + h_penalty
+                
+                if total_cost < min_cost:
+                    min_cost = total_cost
                     best_id = hid
             
             if best_id is None:
@@ -228,6 +239,7 @@ class HandTracker:
             
             matched_ids.add(best_id)
             hstate = self.hand_registry[best_id]
+            hstate["handedness"] = det_hand # Persist handedness in state
             hstate["missing_count"] = 0
             
             # 1. Dynamic Speed Factor (from previous history)
