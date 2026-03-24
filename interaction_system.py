@@ -44,19 +44,26 @@ class InteractiveObject:
     glow_intensity: float = 0.0
     # Animation properties
     target_position: Optional[Point] = None
+    displacement: Point = field(default_factory=lambda: Point(0, 0))
     lerp_speed: float = 0.15
     
     def contains_point(self, point: Point) -> bool:
-        return (self.position.x <= point.x <= self.position.x + self.size[0] and
-                self.position.y <= point.y <= self.position.y + self.size[1])
+        # Check against both base position AND displacement for precise interaction
+        px, py = self.position.x + self.displacement.x, self.position.y + self.displacement.y
+        return (px <= point.x <= px + self.size[0] and
+                py <= point.y <= py + self.size[1])
 
-    def update_animation(self):
-        """Smoothly move position towards target_position."""
+    def update_animation(self, velocity: Tuple[float, float] = (0, 0)):
+        """Smoothly move position towards target and apply spring-back wind effect."""
+        # 1. Base Position Lerp (Global movement)
         if self.target_position:
-            dx = self.target_position.x - self.position.x
-            dy = self.target_position.y - self.position.y
-            self.position.x += dx * self.lerp_speed
-            self.position.y += dy * self.lerp_speed
+            self.position.x += (self.target_position.x - self.position.x) * self.lerp_speed
+            self.position.y += (self.target_position.y - self.position.y) * self.lerp_speed
+            
+        # 2. Wind Effect Displacement (Physics-based reaction)
+        # Displacement pulls back to zero like a spring while responding to current velocity
+        self.displacement.x = self.displacement.x * 0.85 + velocity[0] * 0.05
+        self.displacement.y = self.displacement.y * 0.85 + velocity[1] * 0.05
 
 
 class TrailManager:
@@ -297,7 +304,15 @@ class InteractionManager:
             self.particles.spawn(pointer[0], pointer[1], velocity[0], velocity[1], (0, 255, 255), count=1)
         
         for obj in self.objects:
-            obj.update_animation()
+            # Apply velocity field influence to object
+            dist_sq = (obj.position.x + obj.size[0]/2 - pointer[0])**2 + (obj.position.y + obj.size[1]/2 - pointer[1])**2
+            dist = np.sqrt(dist_sq)
+            
+            # Wind influence factor based on proximity
+            wind_factor = max(0, 1.0 - dist / 250.0)
+            effective_vel = (velocity[0] * wind_factor, velocity[1] * wind_factor)
+            
+            obj.update_animation(velocity=effective_vel)
             obj.is_hovered = obj.contains_point(p)
             
             if obj.is_hovered:
@@ -324,7 +339,8 @@ class InteractionManager:
             GlassRenderer.draw_pulse(frame, p[0], p[1], p[2])
             
         for obj in self.objects:
-            x, y = int(obj.position.x), int(obj.position.y)
+            # Draw with displacement
+            x, y = int(obj.position.x + obj.displacement.x), int(obj.position.y + obj.displacement.y)
             w, h = obj.size
             GlassRenderer.draw_glass_rect(frame, x, y, w, h, obj.color, obj.opacity, obj.glow_intensity, obj.label)
         return frame

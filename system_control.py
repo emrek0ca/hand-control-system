@@ -78,6 +78,7 @@ class SystemController:
     def map_coordinates(self, x: float, y: float, z: float = 0.5) -> Tuple[int, int]:
         """
         Maps normalized coordinates to screen with Z-axis adaptive sensitivity.
+        Includes safety bounds for multi-monitor environments.
         """
         if not self.available:
             return 0, 0
@@ -85,43 +86,54 @@ class SystemController:
         if time.time() < self.freeze_until:
             return int(self.prev_x or 0), int(self.prev_y or 0)
 
-        if self.invert_x:
-            x = 1.0 - x
-        if self.invert_y:
-            y = 1.0 - y
+        # Update screen size dynamically in case of monitor changes
+        try:
+            self.screen_w, self.screen_h = pyautogui.size()
+        except Exception: pass
 
-        # 1. ROI Mapping (Dynamic scaling to reach screen edges)
-        # We use a non-linear mapping for the edges to make them easier to reach
+        if self.invert_x: x = 1.0 - x
+        if self.invert_y: y = 1.0 - y
+
+        # 1. ROI Mapping with Edge-Push logic
+        # Pushing the coordinates slightly more at the edges to ensure 100% screen coverage
         xm = (x - self.roi_margin) / (1 - 2 * self.roi_margin)
         ym = (y - self.roi_margin) / (1 - 2 * self.roi_margin)
-        xm = max(0.0, min(1.0, xm))
-        ym = max(0.0, min(1.0, ym))
+        
+        # Non-linear edge amplification
+        xm = np.clip(xm, -0.05, 1.05)
+        ym = np.clip(ym, -0.05, 1.05)
         
         tx, ty = xm * self.screen_w, ym * self.screen_h
         
+        # Safety Clip
+        tx = max(0, min(self.screen_w - 1, int(tx)))
+        ty = max(0, min(self.screen_h - 1, int(ty)))
+        
         if self.prev_x is None or self.prev_y is None:
             self.prev_x, self.prev_y = tx, ty
-            return int(tx), int(ty)
+            return tx, ty
 
-        # 2. Adaptive Physics (Distance & Velocity)
+        # 2. Adaptive Physics (Precision Mode)
         dx, dy = tx - self.prev_x, ty - self.prev_y
         dist = math.sqrt(dx*dx + dy*dy)
         
-        # Exponential Gain Curve
         speed_norm = min(1.0, (dist * self.pointer_gain) / 80.0)
         
-        if self.precision_mode and speed_norm < 0.15:
-            # High precision at low speeds
-            alpha = self.base_alpha_min * (speed_norm / 0.15)
+        if self.precision_mode and speed_norm < 0.12:
+            alpha = self.base_alpha_min * (speed_norm / 0.12)
         else:
-            alpha = self.base_alpha_min + (self.base_alpha_max - self.base_alpha_min) * (speed_norm**1.5)
+            alpha = self.base_alpha_min + (self.base_alpha_max - self.base_alpha_min) * (speed_norm**1.4)
         
-        # 3. Apply Smoothing
+        # 3. Apply Smoothing & Out-of-bounds protection
         sx = self.prev_x + (dx * alpha)
         sy = self.prev_y + (dy * alpha)
         
+        # Final monitor-safe clipping
+        sx = max(0, min(self.screen_w - 1, int(sx)))
+        sy = max(0, min(self.screen_h - 1, int(sy)))
+        
         self.prev_x, self.prev_y = sx, sy
-        return int(sx), int(sy)
+        return sx, sy
 
     def move_mouse(self, nx: float, ny: float) -> None:
         if not self.available:
