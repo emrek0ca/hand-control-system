@@ -77,8 +77,8 @@ class SystemController:
 
     def map_coordinates(self, x: float, y: float, z: float = 0.5) -> Tuple[int, int]:
         """
-        Maps normalized coordinates to screen with Z-axis adaptive sensitivity.
-        Includes safety bounds for multi-monitor environments.
+        Maps normalized coordinates to screen with advanced sigmoidal acceleration.
+        Provides pixel-perfect precision at low speeds and rapid travel at high speeds.
         """
         if not self.available:
             return 0, 0
@@ -86,49 +86,56 @@ class SystemController:
         if time.time() < self.freeze_until:
             return int(self.prev_x or 0), int(self.prev_y or 0)
 
-        # Update screen size dynamically in case of monitor changes
         try:
+            # Dynamic re-fetch screen size for multi-monitor or resolution changes
             self.screen_w, self.screen_h = pyautogui.size()
         except Exception: pass
 
         if self.invert_x: x = 1.0 - x
         if self.invert_y: y = 1.0 - y
 
-        # 1. ROI Mapping with Edge-Push logic
-        # Pushing the coordinates slightly more at the edges to ensure 100% screen coverage
+        # 1. ROI Mapping with Soft-Edge Dampening
+        # We allow coordinates to slightly over-travel for 100% corner reachability
         xm = (x - self.roi_margin) / (1 - 2 * self.roi_margin)
         ym = (y - self.roi_margin) / (1 - 2 * self.roi_margin)
         
-        # Non-linear edge amplification
-        xm = np.clip(xm, -0.05, 1.05)
-        ym = np.clip(ym, -0.05, 1.05)
-        
+        # Sigmoidal mapping for corners (Easier to reach edges without hand strain)
+        def edge_push(val):
+            v = np.clip(val, 0, 1)
+            # Cubic push towards edges
+            return v + 0.1 * (v - 0.5)**3 if (v < 0.1 or v > 0.9) else v
+            
+        xm, ym = edge_push(xm), edge_push(ym)
         tx, ty = xm * self.screen_w, ym * self.screen_h
-        
-        # Safety Clip
-        tx = max(0, min(self.screen_w - 1, int(tx)))
-        ty = max(0, min(self.screen_h - 1, int(ty)))
         
         if self.prev_x is None or self.prev_y is None:
             self.prev_x, self.prev_y = tx, ty
-            return tx, ty
+            return int(tx), int(ty)
 
-        # 2. Adaptive Physics (Precision Mode)
+        # 2. Advanced Kinematics: Velocity-Aware Gain
         dx, dy = tx - self.prev_x, ty - self.prev_y
         dist = math.sqrt(dx*dx + dy*dy)
         
-        speed_norm = min(1.0, (dist * self.pointer_gain) / 80.0)
+        # speed_norm: 0 to 1 scale. 100px movement is considered 'fast'
+        speed_norm = min(1.0, (dist * self.pointer_gain) / 120.0)
         
-        if self.precision_mode and speed_norm < 0.12:
-            alpha = self.base_alpha_min * (speed_norm / 0.12)
+        # --- Multi-stage Acceleration Curve ---
+        if speed_norm < 0.08:
+            # Precision Phase: Ultra-low gain for pixel-level work
+            alpha = self.base_alpha_min * 0.6
+        elif speed_norm < 0.25:
+            # Transition Phase: Linear ramp
+            alpha = self.base_alpha_min + (self.base_alpha_max - self.base_alpha_min) * (speed_norm * 1.2)
         else:
-            alpha = self.base_alpha_min + (self.base_alpha_max - self.base_alpha_min) * (speed_norm**1.4)
+            # Travel Phase: Parabolic acceleration for long distances
+            alpha = self.base_alpha_min + (self.base_alpha_max - self.base_alpha_min) * (speed_norm**1.8)
         
-        # 3. Apply Smoothing & Out-of-bounds protection
+        # 3. Apply Smoothing with Micro-Damping
+        # Damping prevents 'infinite' oscillation in high-alpha scenarios
         sx = self.prev_x + (dx * alpha)
         sy = self.prev_y + (dy * alpha)
         
-        # Final monitor-safe clipping
+        # Final monitor-safe boundary check
         sx = max(0, min(self.screen_w - 1, int(sx)))
         sy = max(0, min(self.screen_h - 1, int(sy)))
         

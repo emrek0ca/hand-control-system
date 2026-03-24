@@ -246,9 +246,12 @@ class HandTracker:
                     lm.z
                 ))
             
+            # Enhanced Linear Depth Calculation
             wrist, mcp = smoothed[self.WRIST], smoothed[self.MIDDLE_MCP]
-            hand_size = max(0.01, np.sqrt((wrist.x - mcp.x)**2 + (wrist.y - mcp.y)**2))
-            z_smooth = hstate["z_filter"].apply(hand_size)
+            hand_size = np.sqrt((wrist.x - mcp.x)**2 + (wrist.y - mcp.y)**2)
+            # Use power-law to linearize perspective depth response
+            linear_depth = (hand_size / self.neutral_hand_size)**0.7
+            z_smooth = hstate["z_filter"].apply(linear_depth)
             
             pinch_dist = self._dist(smoothed[self.THUMB_TIP], smoothed[self.INDEX_TIP]) / hand_size
             mid_pinch = self._dist(smoothed[self.THUMB_TIP], smoothed[self.MIDDLE_TIP]) / hand_size
@@ -354,32 +357,37 @@ class HandTracker:
         for data in hand_data_list:
             pts = [(int(lm.x * w), int(lm.y * h)) for lm in data.smoothed_landmarks]
             
-            # Professional Cyber-UI Palette
-            base_color = (255, 200, 0) # Cyan-Blue base
-            if data.state == GestureState.CLICKED: base_color = (0, 0, 255) # Red for action
-            elif data.state == GestureState.GRABBING: base_color = (255, 0, 100) # Purple for grab
-            elif data.state == GestureState.SCROLLING: base_color = (0, 255, 100) # Green for scroll
+            # Depth-aware opacity (Fades slightly when farther away)
+            opacity_factor = np.clip(data.z_depth * 1.5, 0.4, 1.0)
             
-            # 1. Draw connections with Glow effect
+            # Professional Cyber-UI Palette
+            base_color = (255, 200, 0)
+            if data.state == GestureState.CLICKED: base_color = (0, 0, 255)
+            elif data.state == GestureState.GRABBING: base_color = (255, 0, 100)
+            elif data.state == GestureState.SCROLLING: base_color = (0, 255, 100)
+            
+            # Blend color with background based on depth
+            def depth_color(c): return tuple(int(x * opacity_factor) for x in c)
+            
+            # 1. Draw connections with Multi-layer Glow
             for conn in mp.solutions.hands.HAND_CONNECTIONS:
                 p1, p2 = pts[conn[0]], pts[conn[1]]
-                # Glow Layer
-                cv2.line(frame, p1, p2, base_color, 4, cv2.LINE_AA)
-                # Core Layer
+                cv2.line(frame, p1, p2, depth_color(base_color), 3, cv2.LINE_AA)
                 cv2.line(frame, p1, p2, (255, 255, 255), 1, cv2.LINE_AA)
             
-            # 2. Draw Joints (Landmarks)
+            # 2. Draw Joints
             for i, pt in enumerate(pts):
-                radius = 3 if i != 0 else 6 # Wrist is larger
-                # Outer Glow
-                cv2.circle(frame, pt, radius + 2, base_color, -1, cv2.LINE_AA)
-                # Inner White
+                radius = 3 if i != 0 else 5
+                cv2.circle(frame, pt, radius + 1, depth_color(base_color), -1, cv2.LINE_AA)
                 cv2.circle(frame, pt, radius, (255, 255, 255), -1, cv2.LINE_AA)
             
-            # 3. Side Label with professional Typography feel
+            # 3. Follow-Label with subtle momentum (simulated by velocity offset)
+            vx, vy = data.velocity_vector
+            offset_x, offset_y = int(vx * -150), int(vy * -150)
+            lx, ly = pts[0][0] - 40 + offset_x, pts[0][1] + 45 + offset_y
+            
             label = f"{data.handedness.upper()} | {data.state.name}"
-            cv2.putText(frame, label, (pts[0][0]-40, pts[0][1]+40), 
-                        cv2.FONT_HERSHEY_DUPLEX, 0.5, (0, 0, 0), 2, cv2.LINE_AA)
-            cv2.putText(frame, label, (pts[0][0]-40, pts[0][1]+40), 
-                        cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+            # Shadow for legibility
+            cv2.putText(frame, label, (lx+1, ly+1), cv2.FONT_HERSHEY_DUPLEX, 0.45, (0, 0, 0), 1, cv2.LINE_AA)
+            cv2.putText(frame, label, (lx, ly), cv2.FONT_HERSHEY_DUPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
         return frame
