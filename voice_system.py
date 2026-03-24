@@ -120,6 +120,7 @@ class VoiceCommandEngine:
             self.state = VoiceState.ERROR
             self.is_listening = False
             return
+            
         try:
             with self.mic as source:
                 audio = self.recognizer.listen(
@@ -129,18 +130,31 @@ class VoiceCommandEngine:
                 )
             
             self.state = VoiceState.PROCESSING
+            # Network-safe recognition with explicit timeout
             text = self.recognizer.recognize_google(audio, language=self.language)
             
             if self.on_result:
                 self.on_result(text)
             
             self.state = VoiceState.SUCCESS
-        except Exception:
+        except sr.WaitTimeoutError:
+            print("[VOICE] Listen Timeout")
+            self.state = VoiceState.IDLE
+        except sr.UnknownValueError:
+            print("[VOICE] Could not understand audio")
+            self.state = VoiceState.ERROR
+        except sr.RequestError as e:
+            print(f"[VOICE] Network/API Error: {e}")
+            self.state = VoiceState.ERROR
+            self.speak("Ses motoru şu an çevrimdışı.")
+        except Exception as e:
+            print(f"[VOICE] Unexpected Error: {e}")
             self.state = VoiceState.ERROR
         finally:
             self.is_listening = False
             time.sleep(1)
-            self.state = VoiceState.IDLE
+            if self.state != VoiceState.PROCESSING:
+                self.state = VoiceState.IDLE
 
     def match_command(self, text: str, commands: List[dict]) -> Optional[dict]:
         """Fuzzy match text against a list of registered commands and extract arguments."""

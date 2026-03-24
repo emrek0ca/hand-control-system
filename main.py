@@ -980,25 +980,46 @@ class GestureControlApp:
         last_time = time.time()
         f_count = 0
         processed_frames = 0
+        reconnect_attempts = 0
+        
         while self.running:
             loop_start = time.time()
+            
+            if self.cap is None or not self.cap.isOpened():
+                self.logger.warning("camera_disconnected", extra={"event": "camera_disconnected"})
+                if self.voice.enabled and reconnect_attempts == 0:
+                    self.voice.speak("Kamera bağlantısı koptu, yeniden bağlanılıyor.")
+                
+                # Attempt to reconnect
+                if not self._reopen_camera(self.camera_id, self.camera_width, self.camera_height):
+                    reconnect_attempts += 1
+                    time.sleep(1) # Wait before retry
+                    continue
+                else:
+                    reconnect_attempts = 0
+                    if self.voice.enabled: self.voice.speak("Kamera bağlandı.")
+
             ret, frame = self.cap.read()
-            if not ret: break
+            if not ret:
+                self.logger.error("frame_read_failed", extra={"event": "frame_read_failed"})
+                # Release and retry in next loop
+                if self.cap: self.cap.release()
+                continue
+            
             processed_frames += 1
             if self.frame_skip and processed_frames % (self.frame_skip + 1) != 0:
-                if not self.headless:
-                    cv2.waitKey(1)
+                if not self.headless: cv2.waitKey(1)
                 if self.fps_limit:
                     target = 1.0 / float(self.fps_limit)
                     elapsed = time.time() - loop_start
-                    if elapsed < target:
-                        time.sleep(target - elapsed)
+                    if elapsed < target: time.sleep(target - elapsed)
                 continue
 
             out = self.process_frame(frame)
             f_count += 1
             if time.time() - last_time >= 1.0:
                 self.fps, f_count, last_time = f_count, 0, time.time()
+            
             if not self.headless:
                 cv2.imshow("HAND CONTROL AI - LIQUID GLASS", out)
                 key = cv2.waitKey(1) & 0xFF
@@ -1006,12 +1027,13 @@ class GestureControlApp:
                 if key == ord('d'): self._toggle_debug()
                 if key == ord('c'): self._start_calibration()
                 if key == ord('p'): self.open_settings_panel()
+            
             if self.fps_limit:
                 target = 1.0 / float(self.fps_limit)
                 elapsed = time.time() - loop_start
-                if elapsed < target:
-                    time.sleep(target - elapsed)
-        self.cap.release()
+                if elapsed < target: time.sleep(target - elapsed)
+                
+        if self.cap: self.cap.release()
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":

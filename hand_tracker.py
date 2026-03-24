@@ -64,16 +64,19 @@ class HandData:
 
 
 class EMAFilter:
-    """Exponential Moving Average filter for jitter reduction."""
+    """Exponential Moving Average filter with speed-adaptive alpha."""
     def __init__(self, alpha=0.5):
-        self.alpha = alpha
+        self.base_alpha = alpha
         self.value = None
 
-    def apply(self, value):
+    def apply(self, value, speed_factor=1.0):
         if self.value is None:
             self.value = value
-        else:
-            self.value = self.alpha * value + (1 - self.alpha) * self.value
+            return self.value
+            
+        # Speed-Adaptive Alpha logic: Higher alpha when moving fast, lower (more smooth) when slow
+        dynamic_alpha = np.clip(self.base_alpha * (0.6 + speed_factor), 0.05, 0.95)
+        self.value = dynamic_alpha * value + (1 - dynamic_alpha) * self.value
         return self.value
 
 
@@ -227,12 +230,21 @@ class HandTracker:
             hstate = self.hand_registry[best_id]
             hstate["missing_count"] = 0
             
-            # Process detection for this ID
+            # 1. Dynamic Speed Factor (from previous history)
+            vel = hstate["velocity"]
+            speed_factor = np.clip(np.sqrt(vel[0]**2 + vel[1]**2) * 20.0, 0.2, 2.5)
+            
+            # 2. Process detection for this ID
             landmarks_raw = det["landmarks"]
             smoothed = []
             for j, lm in enumerate(landmarks_raw.landmark):
                 fx, fy, fz = self._get_lm_filters(hstate, j)
-                smoothed.append(HandLandmark(fx.apply(lm.x), fy.apply(lm.y), fz.apply(lm.z), lm.z))
+                smoothed.append(HandLandmark(
+                    fx.apply(lm.x, speed_factor), 
+                    fy.apply(lm.y, speed_factor), 
+                    fz.apply(lm.z, speed_factor), 
+                    lm.z
+                ))
             
             wrist, mcp = smoothed[self.WRIST], smoothed[self.MIDDLE_MCP]
             hand_size = max(0.01, np.sqrt((wrist.x - mcp.x)**2 + (wrist.y - mcp.y)**2))
