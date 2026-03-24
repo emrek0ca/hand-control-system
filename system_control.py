@@ -44,9 +44,10 @@ class SystemController:
         self.freeze_until = 0
         self.freeze_duration = 0.25
         
-        # Adaptive Sensitivity
+        # Adaptive Sensitivity & Precision Mode
         self.base_alpha_min = 0.05
         self.base_alpha_max = 0.90
+        self.precision_mode = True # Enhanced smoothing at low speeds
         
         # Scrolling & Zooming
         self.prev_scroll_y = None
@@ -72,6 +73,7 @@ class SystemController:
         self.scroll_multiplier = max(1.0, float(kwargs.get("scroll_multiplier", self.scroll_multiplier)))
         self.zoom_threshold = max(0.0, float(kwargs.get("zoom_threshold", self.zoom_threshold)))
         self.zoom_cooldown = max(0.0, float(kwargs.get("zoom_cooldown", self.zoom_cooldown)))
+        self.precision_mode = bool(kwargs.get("precision_mode", self.precision_mode))
 
     def map_coordinates(self, x: float, y: float, z: float = 0.5) -> Tuple[int, int]:
         """
@@ -88,7 +90,8 @@ class SystemController:
         if self.invert_y:
             y = 1.0 - y
 
-        # 1. ROI Mapping (Zoom into the center 76% of the camera view)
+        # 1. ROI Mapping (Dynamic scaling to reach screen edges)
+        # We use a non-linear mapping for the edges to make them easier to reach
         xm = (x - self.roi_margin) / (1 - 2 * self.roi_margin)
         ym = (y - self.roi_margin) / (1 - 2 * self.roi_margin)
         xm = max(0.0, min(1.0, xm))
@@ -104,14 +107,14 @@ class SystemController:
         dx, dy = tx - self.prev_x, ty - self.prev_y
         dist = math.sqrt(dx*dx + dy*dy)
         
-        # Z-axis adjustment: Farther hands (smaller Z) need more precision (lower alpha)
-        # MediaPipe Z is roughly -1 to 1. Closer to camera = smaller Z value? 
-        # Actually MediaPipe Z is relative to wrist. 
-        # We can use the 'hand_size' from tracker but for now let's stick to velocity.
-        
         # Exponential Gain Curve
-        speed_norm = min(1.0, (dist * self.pointer_gain) / 100.0)
-        alpha = self.base_alpha_min + (self.base_alpha_max - self.base_alpha_min) * (speed_norm**1.5)
+        speed_norm = min(1.0, (dist * self.pointer_gain) / 80.0)
+        
+        if self.precision_mode and speed_norm < 0.15:
+            # High precision at low speeds
+            alpha = self.base_alpha_min * (speed_norm / 0.15)
+        else:
+            alpha = self.base_alpha_min + (self.base_alpha_max - self.base_alpha_min) * (speed_norm**1.5)
         
         # 3. Apply Smoothing
         sx = self.prev_x + (dx * alpha)
@@ -150,6 +153,19 @@ class SystemController:
                 return
             self.last_click_time = now
             print(f"[SYSTEM] {button.upper()} CLICK")
+
+    def double_click(self) -> None:
+        if not self.available:
+            return
+        now = time.time()
+        if now - self.last_click_time > self.click_cooldown:
+            self.freeze_until = now + self.freeze_duration * 1.5
+            try:
+                pyautogui.doubleClick()
+            except Exception:
+                return
+            self.last_click_time = now
+            print("[SYSTEM] DOUBLE CLICK")
 
     def scroll_adaptive(self, current_y: float) -> None:
         """Velocity-based scrolling based on finger movement."""

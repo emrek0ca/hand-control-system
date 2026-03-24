@@ -135,15 +135,11 @@ class HandTracker:
         self.max_num_hands = max_num_hands
         self._build_hands()
         
-        # Per-hand storage (keyed by hand index)
-        self.filters = {} # (hand_idx, landmark_idx) -> (EMA_x, EMA_y, EMA_z)
-        self.z_filters = {} # hand_idx -> EMAFilter
-        self.kalman_filters = {} # hand_idx -> KalmanFilter
-        self.states = {} # hand_idx -> GestureState
-        self.state_buffers = {} # hand_idx -> List[GestureState]
-        self.prev_centers = {} # hand_idx -> Tuple
-        self.velocities = {} # hand_idx -> (vx, vy)
-        self.histories = {} # hand_idx -> List
+        # Persistent per-hand storage by ID
+        self.hand_registry = {} # ID -> HandState dictionary
+        self.next_hand_id = 0
+        self.max_id_distance = 0.15 # Max distance to associate same ID
+        self.max_missing_frames = 5
         
         self.filter_alpha = filter_alpha
         self.BUFFER_SIZE = buffer_size
@@ -168,160 +164,145 @@ class HandTracker:
             min_tracking_confidence=self.confidence_threshold,
         )
 
-    def reconfigure(
-        self,
-        confidence_threshold: Optional[float] = None,
-        max_num_hands: Optional[int] = None,
-        buffer_size: Optional[int] = None,
-        filter_alpha: Optional[float] = None,
-        pinch_threshold: Optional[float] = None,
-        release_threshold: Optional[float] = None,
-        velocity_lock: Optional[float] = None,
-        neutral_hand_size: Optional[float] = None,
-    ):
-        rebuild = False
-        if confidence_threshold is not None and confidence_threshold != self.confidence_threshold:
-            self.confidence_threshold = confidence_threshold
-            rebuild = True
-        if max_num_hands is not None and max_num_hands != self.max_num_hands:
-            self.max_num_hands = max(1, int(max_num_hands))
-            rebuild = True
-        if buffer_size is not None:
-            self.BUFFER_SIZE = max(1, int(buffer_size))
-        if filter_alpha is not None:
-            self.filter_alpha = max(0.01, min(0.99, float(filter_alpha)))
-            rebuild = True
-        if pinch_threshold is not None:
-            self.PINCH_THRESH = float(pinch_threshold)
-        if release_threshold is not None:
-            self.RELEASE_THRESH = float(release_threshold)
-        if velocity_lock is not None:
-            self.VELOCITY_LOCK = float(velocity_lock)
-        if neutral_hand_size is not None:
-            self.neutral_hand_size = float(neutral_hand_size)
-        if rebuild:
-            self._build_hands()
-            self.filters.clear()
-            self.z_filters.clear()
-            self.kalman_filters.clear()
-            self.states.clear()
-            self.state_buffers.clear()
-            self.prev_centers.clear()
-            self.velocities.clear()
-            self.histories.clear()
+    def _create_hand_state(self, initial_center):
+        return {
+            "z_filter": EMAFilter(alpha=0.4),
+            "kalman": KalmanFilter(),
+            "state": GestureState.IDLE,
+            "buffer": [],
+            "prev_center": initial_center,
+            "velocity": (0.0, 0.0),
+            "history": [],
+            "missing_count": 0,
+            "filters": {} # (landmark_idx) -> (EMA_x, EMA_y, EMA_z)
+        }
 
-    def _init_hand_storage(self, idx: int):
-        if idx not in self.z_filters:
-            self.z_filters[idx] = EMAFilter(alpha=0.4)
-            self.kalman_filters[idx] = KalmanFilter()
-            self.states[idx] = GestureState.IDLE
-            self.state_buffers[idx] = []
-            self.prev_centers[idx] = None
-            self.velocities[idx] = (0.0, 0.0)
-            self.histories[idx] = []
-
-    def _get_filter(self, hand_idx: int, lm_idx: int):
-        key = (hand_idx, lm_idx)
-        if key not in self.filters:
-            self.filters[key] = (EMAFilter(self.filter_alpha), 
-                                 EMAFilter(self.filter_alpha), 
-                                 EMAFilter(self.filter_alpha))
-        return self.filters[key]
-
-    def apply_calibration(self, pinch: float, release: float, size: float):
-        self.PINCH_THRESH, self.RELEASE_THRESH, self.neutral_hand_size = pinch, release, size
-        self.is_calibrated = True
-
-    def detect_swipe(self, hand_idx: int = 0) -> Optional[str]:
-        history = self.histories.get(hand_idx, [])
-        if len(history) < 3: return None
-        start_pos, start_time = history[0]
-        end_pos, end_time = history[-1]
-        dt = end_time - start_time
-        if dt > 0.3 or dt < 0.05: return None
-        dx, dy = end_pos[0] - start_pos[0], end_pos[1] - start_pos[1]
-        dist = np.sqrt(dx*dx + dy*dy)
-        if dist < 0.15: return None
-        return ("RIGHT" if dx > 0 else "LEFT") if abs(dx) > abs(dy) else ("DOWN" if dy > 0 else "UP")
+    def _get_lm_filters(self, state, lm_idx):
+        if lm_idx not in state["filters"]:
+            state["filters"][lm_idx] = (EMAFilter(self.filter_alpha), 
+                                       EMAFilter(self.filter_alpha), 
+                                       EMAFilter(self.filter_alpha))
+        return state["filters"][lm_idx]
 
     def process_frame(self, frame: np.ndarray) -> List[HandData]:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.hands.process(rgb)
         hand_data_list = []
         
+        # Current detections
+        detections = []
         if results.multi_hand_landmarks:
             for i, landmarks_raw in enumerate(results.multi_hand_landmarks):
-                self._init_hand_storage(i)
                 handedness = results.multi_handedness[i].classification[0].label
                 conf = results.multi_handedness[i].classification[0].score
-                
-                smoothed = []
-                for j, lm in enumerate(landmarks_raw.landmark):
-                    fx, fy, fz = self._get_filter(i, j)
-                    smoothed.append(HandLandmark(fx.apply(lm.x), fy.apply(lm.y), fz.apply(lm.z), lm.z))
-                
-                wrist, mcp = smoothed[self.WRIST], smoothed[self.MIDDLE_MCP]
-                hand_size = max(0.01, np.sqrt((wrist.x - mcp.x)**2 + (wrist.y - mcp.y)**2))
-                z_smooth = self.z_filters[i].apply(hand_size)
-                
-                pinch_dist = self._dist(smoothed[self.THUMB_TIP], smoothed[self.INDEX_TIP]) / hand_size
-                mid_pinch = self._dist(smoothed[self.THUMB_TIP], smoothed[self.MIDDLE_TIP]) / hand_size
-                
-                now = time.time()
-                raw_center = (np.mean([lm.x for lm in smoothed]), np.mean([lm.y for lm in smoothed]))
-                center = self.kalman_filters[i].update(raw_center)
-                
-                self.histories[i].append((center, now))
-                self.histories[i] = [(c, t) for c, t in self.histories[i] if now - t < 0.5]
-                
-                if self.prev_centers[i]:
-                    self.velocities[i] = (center[0]-self.prev_centers[i][0], center[1]-self.prev_centers[i][1])
-                self.prev_centers[i] = center
-                
-                speed = np.sqrt(self.velocities[i][0]**2 + self.velocities[i][1]**2)
-                self.states[i] = self._update_fsm(i, pinch_dist, mid_pinch, speed, smoothed)
-                
-                data = HandData(
-                    landmarks=[HandLandmark(lm.x, lm.y, lm.z, lm.z) for lm in landmarks_raw.landmark],
-                    smoothed_landmarks=smoothed,
-                    handedness=handedness,
-                    confidence=conf,
-                    gesture=self._map_state_to_gesture(self.states[i], smoothed),
-                    center=center,
-                    is_valid=True,
-                    state=self.states[i],
-                    velocity=speed,
-                    pinch_ratio=pinch_dist,
-                    z_depth=z_smooth,
-                    velocity_vector=self.velocities[i],
-                )
-                if self.states[i] == GestureState.SCROLLING: data.scroll_y = smoothed[self.INDEX_TIP].y
-                hand_data_list.append(data)
-                
+                raw_center = (np.mean([lm.x for lm in landmarks_raw.landmark]), 
+                             np.mean([lm.y for lm in landmarks_raw.landmark]))
+                detections.append({
+                    "landmarks": landmarks_raw,
+                    "handedness": handedness,
+                    "confidence": conf,
+                    "center": raw_center
+                })
+
+        # Match detections to registry
+        matched_ids = set()
+        for det in detections:
+            best_id = None
+            min_dist = self.max_id_distance
+            
+            for hid, hstate in self.hand_registry.items():
+                if hid in matched_ids: continue
+                dist = np.sqrt((det["center"][0] - hstate["prev_center"][0])**2 + 
+                               (det["center"][1] - hstate["prev_center"][1])**2)
+                if dist < min_dist:
+                    min_dist = dist
+                    best_id = hid
+            
+            if best_id is None:
+                best_id = self.next_hand_id
+                self.next_hand_id += 1
+                self.hand_registry[best_id] = self._create_hand_state(det["center"])
+            
+            matched_ids.add(best_id)
+            hstate = self.hand_registry[best_id]
+            hstate["missing_count"] = 0
+            
+            # Process detection for this ID
+            landmarks_raw = det["landmarks"]
+            smoothed = []
+            for j, lm in enumerate(landmarks_raw.landmark):
+                fx, fy, fz = self._get_lm_filters(hstate, j)
+                smoothed.append(HandLandmark(fx.apply(lm.x), fy.apply(lm.y), fz.apply(lm.z), lm.z))
+            
+            wrist, mcp = smoothed[self.WRIST], smoothed[self.MIDDLE_MCP]
+            hand_size = max(0.01, np.sqrt((wrist.x - mcp.x)**2 + (wrist.y - mcp.y)**2))
+            z_smooth = hstate["z_filter"].apply(hand_size)
+            
+            pinch_dist = self._dist(smoothed[self.THUMB_TIP], smoothed[self.INDEX_TIP]) / hand_size
+            mid_pinch = self._dist(smoothed[self.THUMB_TIP], smoothed[self.MIDDLE_TIP]) / hand_size
+            
+            now = time.time()
+            center = hstate["kalman"].update(det["center"])
+            
+            hstate["history"].append((center, now))
+            hstate["history"] = [(c, t) for c, t in hstate["history"] if now - t < 0.5]
+            
+            if hstate["prev_center"]:
+                hstate["velocity"] = (center[0]-hstate["prev_center"][0], center[1]-hstate["prev_center"][1])
+            hstate["prev_center"] = center
+            
+            speed = np.sqrt(hstate["velocity"][0]**2 + hstate["velocity"][1]**2)
+            hstate["state"] = self._update_fsm(best_id, pinch_dist, mid_pinch, speed, smoothed)
+            
+            data = HandData(
+                landmarks=[HandLandmark(lm.x, lm.y, lm.z, lm.z) for lm in landmarks_raw.landmark],
+                smoothed_landmarks=smoothed,
+                handedness=det["handedness"],
+                confidence=det["confidence"],
+                gesture=self._map_state_to_gesture(hstate["state"], smoothed),
+                center=center,
+                is_valid=True,
+                state=hstate["state"],
+                velocity=speed,
+                pinch_ratio=pinch_dist,
+                z_depth=z_smooth,
+                velocity_vector=hstate["velocity"],
+            )
+            if hstate["state"] == GestureState.SCROLLING: data.scroll_y = smoothed[self.INDEX_TIP].y
+            hand_data_list.append(data)
+
+        # Cleanup missing hands
+        to_delete = []
+        for hid in self.hand_registry:
+            if hid not in matched_ids:
+                self.hand_registry[hid]["missing_count"] += 1
+                if self.hand_registry[hid]["missing_count"] > self.max_missing_frames:
+                    to_delete.append(hid)
+        for hid in to_delete:
+            del self.hand_registry[hid]
+            
         return hand_data_list
 
-    def _dist(self, p1, p2):
-        return np.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2)
-
-    def _update_fsm(self, idx: int, pinch: float, m_pinch: float, vel: float, lms: List[HandLandmark]) -> GestureState:
+    def _update_fsm(self, hid: int, pinch: float, m_pinch: float, vel: float, lms: List[HandLandmark]) -> GestureState:
+        hstate = self.hand_registry[hid]
         raw = GestureState.IDLE
         idx_up, mid_up = lms[self.INDEX_TIP].y < lms[self.INDEX_PIP].y, lms[self.MIDDLE_TIP].y < lms[self.MIDDLE_PIP].y
         ring_up, pinky_up = lms[self.RING_TIP].y < lms[self.RING_PIP].y, lms[self.PINKY_TIP].y < lms[self.PINKY_PIP].y
         
         if vel > self.VELOCITY_LOCK: raw = GestureState.MOVING
         elif m_pinch < self.PINCH_THRESH: raw = GestureState.RIGHT_CLICK
-        elif pinch < self.PINCH_THRESH: raw = GestureState.CLICKED if self.states[idx] in [GestureState.PINCHING, GestureState.CLICKED] else GestureState.PINCHING
-        elif self.states[idx] == GestureState.CLICKED and pinch < self.RELEASE_THRESH: raw = GestureState.CLICKED
+        elif pinch < self.PINCH_THRESH: raw = GestureState.CLICKED if hstate["state"] in [GestureState.PINCHING, GestureState.CLICKED] else GestureState.PINCHING
+        elif hstate["state"] == GestureState.CLICKED and pinch < self.RELEASE_THRESH: raw = GestureState.CLICKED
         elif idx_up and mid_up and not ring_up and not pinky_up: raw = GestureState.SCROLLING
         elif not idx_up and not mid_up and not ring_up and not pinky_up: raw = GestureState.GRABBING
         else: raw = GestureState.IDLE
 
-        buf = self.state_buffers[idx]
+        buf = hstate["buffer"]
         buf.append(raw)
         if len(buf) > self.BUFFER_SIZE: buf.pop(0)
         if all(s == raw for s in buf):
             return GestureState.CLICKED if raw == GestureState.PINCHING else raw
-        return self.states[idx]
+        return hstate["state"]
 
     def _map_state_to_gesture(self, state: GestureState, lms: List[HandLandmark]) -> GestureType:
         if state == GestureState.CLICKED: return GestureType.OK

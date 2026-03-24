@@ -618,6 +618,8 @@ class GestureControlApp:
             self.controller.drag_mouse(hand.center[0], hand.center[1])
         elif action == "left_click":
             self.controller.click("left")
+        elif action == "double_click":
+            self.controller.double_click()
         elif action == "right_click":
             self.controller.click("right")
         elif action == "scroll" and hand is not None:
@@ -724,6 +726,16 @@ class GestureControlApp:
             pointer_px = (int(pointer[0] * self.width), int(pointer[1] * self.height))
             if self.show_hud:
                 clicked = self.current_hand.state == GestureState.CLICKED and self.prev_hand_state != GestureState.CLICKED
+                
+                # --- Double Click Logic (Hand-based) ---
+                if clicked:
+                    now = time.time()
+                    if hasattr(self, "_last_click_time") and (now - self._last_click_time < 0.35):
+                        self.perform_action("double_click")
+                        self._last_click_time = 0 # Reset
+                    else:
+                        self._last_click_time = now
+
                 v = self.current_hand.velocity_vector
                 v_px = (v[0] * self.width, v[1] * self.height)
 
@@ -755,6 +767,21 @@ class GestureControlApp:
                     self.multi_analyzer.prayer_active = True
             else:
                 self.multi_analyzer.prayer_active = False
+
+            # --- Two-Hand Zoom Logic ---
+            # Use distance change for zoom if both hands are in a specific state (e.g., GRABBING)
+            if all(h.state == GestureState.GRABBING for h in self.hands):
+                scale = self.multi_analyzer.get_pinch_scale(rel_data)
+                if not hasattr(self, "_prev_multi_scale"):
+                    self._prev_multi_scale = scale
+                else:
+                    diff = scale - self._prev_multi_scale
+                    if abs(diff) > 0.05:
+                        if diff > 0: self.perform_action("zoom_in")
+                        else: self.perform_action("zoom_out")
+                        self._prev_multi_scale = scale
+            else:
+                if hasattr(self, "_prev_multi_scale"): delattr(self, "_prev_multi_scale")
 
         # 3. Per-hand gesture bindings + primary-hand cursor logic
         if self.system_active and not self.is_calibrating:
