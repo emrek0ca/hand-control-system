@@ -199,38 +199,68 @@ class GlassRenderer:
     def draw_glass_rect(frame: np.ndarray, x: int, y: int, w: int, h: int, 
                         color: Tuple[int, int, int], opacity: float, 
                         glow: float = 0.0, label: str = "") -> None:
-        """Draws a semi-transparent 'glass' rectangle with optional glow."""
+        """Draws a semi-transparent 'glass' rectangle with soft edges and glow."""
+        # 1. Main Background with subtle gradient feel
         overlay = frame.copy()
         cv2.rectangle(overlay, (x, y), (x + w, y + h), color, -1)
+        
+        # Apply slight blur to overlay for a frosted glass effect
+        sub = overlay[y:y+h, x:x+w]
+        if sub.size > 0:
+            sub = cv2.GaussianBlur(sub, (3, 3), 0)
+            overlay[y:y+h, x:x+w] = sub
+            
         cv2.addWeighted(overlay, opacity, frame, 1 - opacity, 0, frame)
+        
+        # 2. Beveled Edges
         edge_color = (255, 255, 255)
         cv2.rectangle(frame, (x, y), (x + w, y + h), edge_color, 1, cv2.LINE_AA)
         
+        # 3. Dynamic Glow Layer
         if glow > 0:
-            for i in range(1, 4):
-                alpha = (glow * 0.3) / i
-                cv2.rectangle(frame, (x-i, y-i), (x+w+i, y+h+i), color, 1, cv2.LINE_AA)
+            glow_color = tuple(int(c * 1.2) for c in color)
+            for i in range(1, 6):
+                alpha = (glow * 0.4) / i
+                thickness = i
+                # Draw outer soft glow
+                cv2.rectangle(frame, (x-i, y-i), (x+w+i, y+h+i), glow_color, 1, cv2.LINE_AA)
         
         if label:
             font = cv2.FONT_HERSHEY_DUPLEX
-            scale = 0.55
+            scale = 0.5
             thickness = 1
-            text_size = cv2.getTextSize(label, font, scale, thickness)[0]
-            tx = x + (w - text_size[0]) // 2
-            ty = y + (h + text_size[1]) // 2
-            cv2.putText(frame, label, (tx+1, ty+1), font, scale, (0, 0, 0), thickness, cv2.LINE_AA)
+            t_size = cv2.getTextSize(label, font, scale, thickness)[0]
+            tx = x + (w - t_size[0]) // 2
+            ty = y + (h + t_size[1]) // 2
+            # Text shadow
+            cv2.putText(frame, label, (tx+1, ty+1), font, scale, (20, 20, 20), thickness, cv2.LINE_AA)
             cv2.putText(frame, label, (tx, ty), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
 
     @staticmethod
     def draw_aura(frame: np.ndarray, center: Tuple[int, int], radius: int, 
                   color: Tuple[int, int, int], intensity: float):
-        """Draws a pulsing glowing aura around a point."""
+        """Draws a pulsing glowing aura with secondary rings."""
         if intensity <= 0: return
-        pulse = 1.0 + 0.1 * np.sin(time.time() * 5)
+        pulse = 1.0 + 0.15 * np.sin(time.time() * 6)
         r = int(radius * pulse)
-        for i in range(1, 5):
-            cv2.circle(frame, center, r + i*2, color, 1, cv2.LINE_AA)
-        cv2.circle(frame, center, r, (255, 255, 255), 1, cv2.LINE_AA)
+        
+        # Outer Ring
+        cv2.circle(frame, center, r + 10, color, 1, cv2.LINE_AA)
+        # Inner Glowing Rings
+        for i in range(1, 4):
+            alpha = (intensity * 0.5) / i
+            c = tuple(int(ch * alpha) for ch in color)
+            cv2.circle(frame, center, r - i*3, c, 2, cv2.LINE_AA)
+            
+        cv2.circle(frame, center, r, (255, 255, 255), 2, cv2.LINE_AA)
+
+    @staticmethod
+    def draw_pulse(frame: np.ndarray, center: Tuple[int, int], life: float, color: Tuple[int, int, int]):
+        """Visual feedback for a click action."""
+        r = int(20 + (1.0 - life) * 60)
+        alpha = life
+        c = tuple(int(ch * alpha) for ch in color)
+        cv2.circle(frame, center, r, c, 3, cv2.LINE_AA)
 
 
 class InteractionManager:
@@ -243,41 +273,56 @@ class InteractionManager:
         self.active_object: Optional[InteractiveObject] = None
         self.trail = TrailManager()
         self.particles = ParticleEngine()
+        self.pulses = [] # List of (center, life, color)
 
     def add_object(self, obj: InteractiveObject):
         self.objects.append(obj)
+
+    def trigger_pulse(self, center: Tuple[int, int], color=(255, 255, 255)):
+        self.pulses.append([center, 1.0, color])
 
     def check_interactions(self, pointer: Tuple[int, int], clicked: bool, velocity: Tuple[float, float] = (0, 0)):
         p = Point(pointer[0], pointer[1])
         self.active_object = None
         self.trail.add_point(pointer[0], pointer[1])
         
+        # Pulse on click
+        if clicked:
+            self.trigger_pulse(pointer, color=(0, 255, 255))
+            self.particles.spawn(pointer[0], pointer[1], 0, 0, (255, 255, 255), count=15)
+        
         # Spawn particles based on velocity
         speed = np.sqrt(velocity[0]**2 + velocity[1]**2)
-        if speed > 5:
-            self.particles.spawn(pointer[0], pointer[1], velocity[0], velocity[1], (0, 255, 255), count=2)
+        if speed > 8:
+            self.particles.spawn(pointer[0], pointer[1], velocity[0], velocity[1], (0, 255, 255), count=1)
         
         for obj in self.objects:
             obj.update_animation()
             obj.is_hovered = obj.contains_point(p)
             
             if obj.is_hovered:
-                obj.glow_intensity = min(1.0, obj.glow_intensity + 0.2)
+                obj.glow_intensity = min(1.0, obj.glow_intensity + 0.15)
                 self.active_object = obj
-                # Interaction particles
-                if clicked:
-                    self.particles.spawn(pointer[0], pointer[1], 0, 0, obj.color, count=10)
             else:
-                obj.glow_intensity = max(0.0, obj.glow_intensity - 0.1)
+                obj.glow_intensity = max(0.0, obj.glow_intensity - 0.08)
                 
             if clicked and obj.is_hovered and obj.on_click:
                 obj.on_click()
+        
+        # Update Pulses
+        for pulse in self.pulses:
+            pulse[1] -= 0.05
+        self.pulses = [p for p in self.pulses if p[1] > 0]
         
         self.particles.update()
 
     def draw(self, frame: np.ndarray) -> np.ndarray:
         self.trail.draw(frame)
         self.particles.draw(frame)
+        
+        for p in self.pulses:
+            GlassRenderer.draw_pulse(frame, p[0], p[1], p[2])
+            
         for obj in self.objects:
             x, y = int(obj.position.x), int(obj.position.y)
             w, h = obj.size

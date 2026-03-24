@@ -285,24 +285,39 @@ class HandTracker:
 
     def _update_fsm(self, hid: int, pinch: float, m_pinch: float, vel: float, lms: List[HandLandmark]) -> GestureState:
         hstate = self.hand_registry[hid]
+        prev_state = hstate["state"]
         raw = GestureState.IDLE
         idx_up, mid_up = lms[self.INDEX_TIP].y < lms[self.INDEX_PIP].y, lms[self.MIDDLE_TIP].y < lms[self.MIDDLE_PIP].y
         ring_up, pinky_up = lms[self.RING_TIP].y < lms[self.RING_PIP].y, lms[self.PINKY_TIP].y < lms[self.PINKY_PIP].y
         
-        if vel > self.VELOCITY_LOCK: raw = GestureState.MOVING
-        elif m_pinch < self.PINCH_THRESH: raw = GestureState.RIGHT_CLICK
-        elif pinch < self.PINCH_THRESH: raw = GestureState.CLICKED if hstate["state"] in [GestureState.PINCHING, GestureState.CLICKED] else GestureState.PINCHING
-        elif hstate["state"] == GestureState.CLICKED and pinch < self.RELEASE_THRESH: raw = GestureState.CLICKED
-        elif idx_up and mid_up and not ring_up and not pinky_up: raw = GestureState.SCROLLING
-        elif not idx_up and not mid_up and not ring_up and not pinky_up: raw = GestureState.GRABBING
-        else: raw = GestureState.IDLE
+        # Enhanced Hysteresis: Use different thresholds for entering vs leaving a state
+        p_enter = self.PINCH_THRESH
+        p_leave = self.RELEASE_THRESH
+        
+        if vel > self.VELOCITY_LOCK: 
+            raw = GestureState.MOVING
+        elif m_pinch < p_enter: 
+            raw = GestureState.RIGHT_CLICK
+        elif prev_state == GestureState.CLICKED:
+            # Stay clicked until pinch distance exceeds release threshold
+            raw = GestureState.CLICKED if pinch < p_leave else GestureState.IDLE
+        elif pinch < p_enter:
+            raw = GestureState.CLICKED if prev_state == GestureState.PINCHING else GestureState.PINCHING
+        elif idx_up and mid_up and not ring_up and not pinky_up: 
+            raw = GestureState.SCROLLING
+        elif not idx_up and not mid_up and not ring_up and not pinky_up: 
+            raw = GestureState.GRABBING
+        else: 
+            raw = GestureState.IDLE
 
         buf = hstate["buffer"]
         buf.append(raw)
         if len(buf) > self.BUFFER_SIZE: buf.pop(0)
+        
+        # Decision logic based on buffer consistency
         if all(s == raw for s in buf):
             return GestureState.CLICKED if raw == GestureState.PINCHING else raw
-        return hstate["state"]
+        return prev_state
 
     def _map_state_to_gesture(self, state: GestureState, lms: List[HandLandmark]) -> GestureType:
         if state == GestureState.CLICKED: return GestureType.OK
@@ -326,11 +341,33 @@ class HandTracker:
         h, w = frame.shape[:2]
         for data in hand_data_list:
             pts = [(int(lm.x * w), int(lm.y * h)) for lm in data.smoothed_landmarks]
-            color = (0, 255, 0)
-            if data.state == GestureState.CLICKED: color = (0, 0, 255)
-            elif data.state == GestureState.GRABBING: color = (255, 0, 0)
-            elif data.state == GestureState.SCROLLING: color = (0, 165, 255)
-            for conn in mp.solutions.hands.HAND_CONNECTIONS: cv2.line(frame, pts[conn[0]], pts[conn[1]], color, 2)
-            for pt in pts: cv2.circle(frame, pt, 4, (255, 255, 255), -1)
-            cv2.putText(frame, f"{data.handedness}: {data.state.name}", (pts[0][0]-20, pts[0][1]+30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            
+            # Professional Cyber-UI Palette
+            base_color = (255, 200, 0) # Cyan-Blue base
+            if data.state == GestureState.CLICKED: base_color = (0, 0, 255) # Red for action
+            elif data.state == GestureState.GRABBING: base_color = (255, 0, 100) # Purple for grab
+            elif data.state == GestureState.SCROLLING: base_color = (0, 255, 100) # Green for scroll
+            
+            # 1. Draw connections with Glow effect
+            for conn in mp.solutions.hands.HAND_CONNECTIONS:
+                p1, p2 = pts[conn[0]], pts[conn[1]]
+                # Glow Layer
+                cv2.line(frame, p1, p2, base_color, 4, cv2.LINE_AA)
+                # Core Layer
+                cv2.line(frame, p1, p2, (255, 255, 255), 1, cv2.LINE_AA)
+            
+            # 2. Draw Joints (Landmarks)
+            for i, pt in enumerate(pts):
+                radius = 3 if i != 0 else 6 # Wrist is larger
+                # Outer Glow
+                cv2.circle(frame, pt, radius + 2, base_color, -1, cv2.LINE_AA)
+                # Inner White
+                cv2.circle(frame, pt, radius, (255, 255, 255), -1, cv2.LINE_AA)
+            
+            # 3. Side Label with professional Typography feel
+            label = f"{data.handedness.upper()} | {data.state.name}"
+            cv2.putText(frame, label, (pts[0][0]-40, pts[0][1]+40), 
+                        cv2.FONT_HERSHEY_DUPLEX, 0.5, (0, 0, 0), 2, cv2.LINE_AA)
+            cv2.putText(frame, label, (pts[0][0]-40, pts[0][1]+40), 
+                        cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
         return frame

@@ -230,16 +230,19 @@ class GestureControlApp:
             self.smart_btn.on_click = self._llm_describe_screen
 
     def _dodge_panels(self, pointer_px):
-        """Move UI panels away if the hand is covering them (Automation)."""
+        """Smoothly move UI panels away and lower opacity if the hand is covering them."""
         px, py = pointer_px
         for obj in self.dashboard.get_manager().objects:
-            # If pointer is near the object, set a dodging target_position
             dist = np.sqrt((obj.position.x + obj.size[0]/2 - px)**2 + (obj.position.y + obj.size[1]/2 - py)**2)
-            if dist < 100:
-                # Smoothly lower opacity instead of moving for better UX
-                obj.opacity = max(0.1, obj.opacity - 0.05)
+            
+            # Smart opacity and intensity scaling based on proximity
+            if dist < 120:
+                obj.opacity = max(0.08, obj.opacity - 0.08)
+                obj.glow_intensity = min(1.0, obj.glow_intensity + 0.1)
             else:
-                obj.opacity = min(0.4, obj.opacity + 0.02)
+                obj.opacity = min(0.45, obj.opacity + 0.04)
+                # Ensure target_position is set for smooth lerping in InteractionManager
+                if not obj.target_position: obj.target_position = Point(obj.position.x, obj.position.y)
 
     def _start_calibration(self):
         self.is_calibrating = True
@@ -793,22 +796,24 @@ class GestureControlApp:
         if self.current_hand:
             pointer = self.current_hand.center
             pointer_px = (int(pointer[0] * self.width), int(pointer[1] * self.height))
-            if self.show_hud:
-                clicked = self.current_hand.state == GestureState.CLICKED and self.prev_hand_state != GestureState.CLICKED
-                
-                # --- Double Click Logic (Hand-based) ---
-                if clicked:
-                    now = time.time()
-                    if hasattr(self, "_last_click_time") and (now - self._last_click_time < 0.35):
-                        self.perform_action("double_click")
-                        self._last_click_time = 0 # Reset
-                    else:
-                        self._last_click_time = now
+            
+            clicked = self.current_hand.state == GestureState.CLICKED and self.prev_hand_state != GestureState.CLICKED
+            
+            # --- Visual Pulse & Multi-Click Logic ---
+            if clicked:
+                self.dashboard.get_manager().trigger_pulse(pointer_px, color=(0, 255, 255))
+                now = time.time()
+                if hasattr(self, "_last_click_time") and (now - self._last_click_time < 0.35):
+                    self.perform_action("double_click")
+                    self._last_click_time = 0
+                else:
+                    self._last_click_time = now
 
+            if self.show_hud:
                 v = self.current_hand.velocity_vector
                 v_px = (v[0] * self.width, v[1] * self.height)
-
                 self.dashboard.get_manager().check_interactions(pointer_px, clicked, velocity=v_px)
+                
                 if self.adaptive_quality:
                     self._dodge_panels(pointer_px)
                     self._update_contextual_ui()
@@ -822,14 +827,14 @@ class GestureControlApp:
         if len(self.hands) >= 2:
             rel_data = self.multi_analyzer.calculate_relative_data(self.hands)
             
-            # --- Clap Detection (Toggle Mute) ---
+            # --- Two-Hand Effects (Clap, Prayer, Zoom) ---
             if self.multi_analyzer.detect_clap(rel_data):
-                if self.voice.enabled:
-                    self.voice.speak("System Muted")
-                print("[AGENT] CLAP: SYSTEM MUTE")
-                # Add system mute logic if needed
+                self.dashboard.get_manager().trigger_pulse(
+                    (int(rel_data['midpoint'][0]*self.width), int(rel_data['midpoint'][1]*self.height)), 
+                    color=(255, 255, 0)
+                )
+                if self.voice.enabled: self.voice.speak("System Muted")
                 
-            # --- Prayer Pose (Zen Mode) ---
             if self.multi_analyzer.detect_prayer(self.hands, rel_data):
                 if not self.multi_analyzer.prayer_active:
                     self._toggle_zen()
@@ -837,59 +842,36 @@ class GestureControlApp:
             else:
                 self.multi_analyzer.prayer_active = False
 
-            # --- Two-Hand Zoom Logic ---
-            # Use distance change for zoom if both hands are in a specific state (e.g., GRABBING)
             if all(h.state == GestureState.GRABBING for h in self.hands):
                 scale = self.multi_analyzer.get_pinch_scale(rel_data)
-                if not hasattr(self, "_prev_multi_scale"):
-                    self._prev_multi_scale = scale
+                if not hasattr(self, "_prev_multi_scale"): self._prev_multi_scale = scale
                 else:
                     diff = scale - self._prev_multi_scale
-                    if abs(diff) > 0.05:
+                    if abs(diff) > 0.04:
                         if diff > 0: self.perform_action("zoom_in")
                         else: self.perform_action("zoom_out")
                         self._prev_multi_scale = scale
             else:
                 if hasattr(self, "_prev_multi_scale"): delattr(self, "_prev_multi_scale")
 
-        # 3. Per-hand gesture bindings + primary-hand cursor logic
+        # 3. Gesture Bindings Execution
         if self.system_active and not self.is_calibrating:
             any_scroll_binding = False
             any_zoom_binding = False
             present_sides = set()
             for hand in self.hands:
                 side = normalize_handedness(hand.handedness)
-                if side:
-                    present_sides.add(side)
-                if side:
-                    previous_state = self.prev_hand_state_by_side.get(side, GestureState.IDLE)
-                    previous_gesture = self.prev_gesture_type_by_side.get(side, GestureType.NONE)
-                else:
-                    previous_state = GestureState.IDLE
-                    previous_gesture = GestureType.NONE
+                if side: present_sides.add(side)
+                
+                previous_state = self.prev_hand_state_by_side.get(side, GestureState.IDLE) if side else GestureState.IDLE
+                previous_gesture = self.prev_gesture_type_by_side.get(side, GestureType.NONE) if side else GestureType.NONE
 
                 state_changed = hand.state != previous_state
                 gesture_changed = hand.gesture != previous_gesture
                 is_primary = hand is self.current_hand
 
-                self._dispatch_binding(
-                    "gestures",
-                    "state_actions",
-                    hand.state.name,
-                    hand,
-                    state_changed,
-                    handedness=hand.handedness,
-                    is_primary=is_primary,
-                )
-                self._dispatch_binding(
-                    "gestures",
-                    "gesture_actions",
-                    hand.gesture.name,
-                    hand,
-                    gesture_changed,
-                    handedness=hand.handedness,
-                    is_primary=is_primary,
-                )
+                self._dispatch_binding("gestures", "state_actions", hand.state.name, hand, state_changed, handedness=hand.handedness, is_primary=is_primary)
+                self._dispatch_binding("gestures", "gesture_actions", hand.gesture.name, hand, gesture_changed, handedness=hand.handedness, is_primary=is_primary)
 
                 if side:
                     self.prev_hand_state_by_side[side] = hand.state
@@ -900,34 +882,15 @@ class GestureControlApp:
                 any_scroll_binding = any_scroll_binding or state_binding == "scroll" or gesture_binding == "scroll"
                 any_zoom_binding = any_zoom_binding or state_binding in {"zoom_in", "zoom_out"} or gesture_binding in {"zoom_in", "zoom_out"}
 
-            for side in ("Left", "Right"):
-                if side not in present_sides:
-                    self.prev_hand_state_by_side[side] = GestureState.IDLE
-                    self.prev_gesture_type_by_side[side] = GestureType.NONE
-
             if self.current_hand:
-                h = self.current_hand
-                if not any_scroll_binding:
-                    self.controller.reset_scroll()
-                if not any_zoom_binding:
-                    self.controller.reset_zoom()
-
+                if not any_scroll_binding: self.controller.reset_scroll()
+                if not any_zoom_binding: self.controller.reset_zoom()
+                
                 swipe = self.tracker.detect_swipe(hand_idx=self.hands.index(self.current_hand))
                 if swipe:
                     self.last_swipe, self.swipe_time = swipe, time.time()
-                    modifier = 'ctrl'
-                    if swipe == "RIGHT":
-                        self.controller.hotkey(modifier, 'tab')
-                    elif swipe == "LEFT":
-                        self.controller.hotkey(modifier, 'shift', 'tab')
-        else:
-            self.controller.reset_scroll()
-            self.controller.reset_zoom()
-            self.prev_hand_state_by_side["Left"] = GestureState.IDLE
-            self.prev_hand_state_by_side["Right"] = GestureState.IDLE
-            self.prev_gesture_type_by_side["Left"] = GestureType.NONE
-            self.prev_gesture_type_by_side["Right"] = GestureType.NONE
-
+                    self.controller.hotkey('ctrl', 'tab' if swipe == "RIGHT" else 'shift', 'tab')
+        
         if self.current_hand:
             self.prev_hand_state = self.current_hand.state
             self.prev_gesture_type = self.current_hand.gesture
@@ -935,51 +898,30 @@ class GestureControlApp:
             self.prev_hand_state = GestureState.IDLE
             self.prev_gesture_type = GestureType.NONE
 
-        # 4. Calibration
-        if self.is_calibrating and self.current_hand:
-            self._process_calibration(self.current_hand)
-
-        # 5. Professional Rendering
+        # 4. Rendering Phase (Professional Cyber-HUD Aesthetics)
         if not self.headless:
-            # Aura logic
             self.aura_intensity = min(1.0, self.aura_intensity + 0.1) if self.current_hand else max(0.0, self.aura_intensity - 0.05)
             
-            # Draw UI (Unless in Zen Mode)
             if self.show_hud and not self.zen_mode:
                 frame = self.dashboard.get_manager().draw(frame)
                 if self.is_calibrating: self._draw_calibration_hud(frame)
                 else: self._draw_hud(frame)
             
-            # Draw Hands & Energy Bonds
             if self.hands:
                 frame = self.tracker.draw_hand_skeleton(frame, self.hands)
                 
-                # --- State Labels HUD ---
-                for hand in self.hands:
-                    px, py = int(hand.center[0] * self.width), int(hand.center[1] * self.height)
-                    state_text = hand.state.name
-                    if hand.state == GestureState.CLICKED: state_text = "CLICK"
-                    elif hand.state == GestureState.GRABBING: state_text = "GRAB"
-                    elif hand.state == GestureState.SCROLLING: state_text = "SCROLL"
-                    
-                    cv2.putText(frame, state_text, (px + 30, py - 30), cv2.FONT_HERSHEY_DUPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
-
-                # Energy Bond between two hands
+                # Professional Multi-Hand Connectors
                 if len(self.hands) >= 2:
                     p1 = (int(self.hands[0].center[0] * self.width), int(self.hands[0].center[1] * self.height))
                     p2 = (int(self.hands[1].center[0] * self.width), int(self.hands[1].center[1] * self.height))
                     dist = np.linalg.norm(np.array(p1) - np.array(p2))
-                    if dist < 300:
-                        opacity = max(0.1, 1.0 - dist / 300.0)
-                        color = (int(255 * opacity), int(255 * opacity), 255)
-                        cv2.line(frame, p1, p2, color, 2, cv2.LINE_AA)
-                        mid = ((p1[0]+p2[0])//2, (p1[1]+p2[1])//2)
-                        cv2.circle(frame, mid, int(10 * opacity), color, -1, cv2.LINE_AA)
+                    if dist < 350:
+                        opacity = max(0.1, 1.0 - dist / 350.0)
+                        cv2.line(frame, p1, p2, (255, 255, 255), max(1, int(4*opacity)), cv2.LINE_AA)
 
-                # Draw Main Aura
-                if self.current_hand and pointer_px is not None:
-                    radius = int(40 + self.current_hand.z_depth * 100)
-                    GlassRenderer.draw_aura(frame, pointer_px, radius, (0, 255, 255), self.aura_intensity)
+                if self.current_hand and pointer_px:
+                    radius = int(35 + self.current_hand.z_depth * 110)
+                    GlassRenderer.draw_aura(frame, pointer_px, radius, (255, 220, 0), self.aura_intensity)
             
         return frame
 
